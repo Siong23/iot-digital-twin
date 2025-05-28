@@ -53,16 +53,15 @@ def init_database():
         )
     ''')
     
-    # Table for attack logs
+    # Table for attack logs (scan results)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS attack_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            attack_type TEXT,
-            target TEXT,
-            start_time TIMESTAMP,
-            end_time TIMESTAMP,
-            participating_bots INTEGER,
-            status TEXT
+            ip TEXT,
+            port INTEGER,
+            service TEXT,
+            credentials TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
