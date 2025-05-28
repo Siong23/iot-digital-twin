@@ -1,7 +1,5 @@
 # IoT network (digital twin) security testbed using GNS3
 
-Files and Scripts are available in the repository: https://github.com/Siong23/iot-digital-twin
-
 OS: [Ubuntu 22.04.4 LTS](https://releases.ubuntu.com/22.04/?_gl=1*1r2uc59*_gcl_au*MTc1Nzg2NDA4MS4xNzIxNjE4MTUx&_ga=2.157068985.348104353.1721968430-1698206738.1721618148)
 
 Dependencies:
