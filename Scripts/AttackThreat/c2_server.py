@@ -48,6 +48,7 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             command TEXT,
             target_ip TEXT,
+            attack_type TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             status TEXT DEFAULT 'pending'
         )
