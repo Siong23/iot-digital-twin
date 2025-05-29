@@ -487,6 +487,20 @@ def download_bot():
         logging.error(f"Error serving bot client: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/get-scan-results', methods=['GET'])
+def get_scan_results():
+    conn = sqlite3.connect('research_db.sqlite')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT ip, port, service, credentials, MAX(timestamp) as timestamp
+        FROM attack_logs
+        GROUP BY ip
+        ORDER BY timestamp DESC
+    ''')
+    results = [{'ip': row[0], 'port': row[1], 'service': row[2], 'credentials': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(results)
+
 def main():
     """Main entry point"""
     import argparse
