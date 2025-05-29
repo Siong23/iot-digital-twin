@@ -306,7 +306,7 @@ def index():
     cursor = conn.cursor()
     
     # Get active bots
-    cursor.execute('SELECT ip, status, last_seen FROM devices WHERE status = "online" ORDER BY last_seen DESC')
+    cursor.execute('SELECT ip, status, last_seen FROM devices WHERE status = "active" ORDER BY last_seen DESC')
     bots = [{'ip': row[0], 'status': row[1], 'last_seen': row[2]} for row in cursor.fetchall()]
     
     # Get only the latest scan result for each unique IP
