@@ -309,8 +309,13 @@ def index():
     cursor.execute('SELECT ip, status, last_seen FROM devices WHERE status = "online" ORDER BY last_seen DESC')
     bots = [{'ip': row[0], 'status': row[1], 'last_seen': row[2]} for row in cursor.fetchall()]
     
-    # Get scan results
-    cursor.execute('SELECT ip, port, service, credentials, timestamp FROM attack_logs ORDER BY timestamp DESC')
+    # Get only the latest scan result for each unique IP
+    cursor.execute('''
+        SELECT ip, port, service, credentials, MAX(timestamp) as timestamp
+        FROM attack_logs
+        GROUP BY ip
+        ORDER BY timestamp DESC
+    ''')
     scan_results = [{'ip': row[0], 'port': row[1], 'service': row[2], 
                     'credentials': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
     
