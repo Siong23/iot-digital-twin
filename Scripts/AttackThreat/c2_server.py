@@ -163,18 +163,18 @@ class DatabaseManager:
             tn.read_until(b"#", timeout=5)
             tn.read_until(b">", timeout=5)
             
-            self.log(f"Sending command to {ip} via Telnet: {command}")
+            logging.info(f"Sending command to {ip} via Telnet: {command}")
             tn.write((command + "\n").encode())
             
             # Handle potential sudo password prompt
             response = tn.read_until(b"password", timeout=3) # Look for 'password' prompt
             if b"password" in response.lower():
-                self.log(f"Sudo password prompt detected on {ip}")
+                logging.info(f"Sudo password prompt detected on {ip}")
                 if password:
                     tn.write((password + "\n").encode())
-                    self.log(f"Sent sudo password to {ip}")
+                    logging.info(f"Sent sudo password to {ip}")
                 else:
-                    self.log(f"No password available for sudo on {ip}")
+                    logging.info(f"No password available for sudo on {ip}")
                     # May need to handle this case, command might fail
             
             # Give command some time to execute (adjust as needed)
@@ -182,14 +182,14 @@ class DatabaseManager:
             
             # Optionally read command output (can be noisy)
             # output = tn.read_very_lazy()
-            # self.log(f"Output from {ip}: {output.decode()}")
+            # logging.info(f"Output from {ip}: {output.decode()}")
             
-            self.log(f"Command sent to {ip} successfully")
+            logging.info(f"Command sent to {ip} successfully")
             tn.close()
             return True
             
         except Exception as e:
-            self.log(f"Failed to execute Telnet command on {ip}: {e}")
+            logging.error(f"Failed to execute Telnet command on {ip}: {e}")
             return False
 
 # Global variables
