@@ -55,6 +55,15 @@ def init_database():
         )
     ''')
     
+    # Add bot_ip column if it doesn't exist
+    try:
+        cursor.execute('ALTER TABLE commands ADD COLUMN bot_ip TEXT')
+        conn.commit()
+        logging.info("Added bot_ip column to commands table")
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
+    
     # Table for attack logs (scan results)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS attack_logs (
