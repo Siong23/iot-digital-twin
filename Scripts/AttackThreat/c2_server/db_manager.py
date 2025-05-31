@@ -57,11 +57,10 @@ class DatabaseManager:
                 attack_type TEXT,
                 target TEXT,
                 start_time TIMESTAMP,
-                participating_bots INTEGER,
-                status TEXT
+                participating_bots INTEGER,                status TEXT
             )
         ''')
-          conn.commit()
+        conn.commit()
         conn.close()
         logging.info("Database initialized successfully")
     
