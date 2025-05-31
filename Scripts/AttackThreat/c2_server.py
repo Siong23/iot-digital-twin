@@ -146,7 +146,7 @@ class DatabaseManager:
             return attack_id
 
     def execute_telnet_login_and_send(self, ip, username, password, command):
-        """Establish Telnet connection, log in, and send the initial command (e.g., sudo hping3 ... &). Returns the active Telnet object."""
+        """Establish Telnet connection, log in, send the initial command (e.g., sudo hping3 ... &), handle sudo, and return the active Telnet object."""
         tn = None # Initialize tn to None
         try:
             logging.info(f"Attempting Telnet connection to {ip}:23")
@@ -173,25 +173,25 @@ class DatabaseManager:
                 tn.write(b"\n")
                 logging.warning(f"No password provided for {ip}, sent empty line.")
 
-            # Wait for shell prompt or command completion indicator (handle variations and capture output)
+            # Wait for initial shell prompt after successful login
             shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"] # More robust prompt matching including newline
-            index, match, shell_prompt_response = tn.expect(shell_prompt_patterns, timeout=10) # Increased timeout for prompt
-            logging.info(f"Read from {ip} (shell prompt): {shell_prompt_response.decode(errors='ignore')}")
+            logging.info(f"Waiting for initial shell prompt on {ip}...")
+            index, match, initial_shell_response = tn.expect(shell_prompt_patterns, timeout=10) # Increased timeout for prompt
+            logging.info(f"Read from {ip} (initial shell prompt): {initial_shell_response.decode(errors='ignore')}")
 
             if match:
-                logging.info(f"Shell prompt detected on {ip}.")
-                # Send the command with '&' for backgrounding and potential 'nohup'
-                # Adding nohup to ensure command runs after session disconnects unexpectedly
+                logging.info(f"Initial shell prompt detected on {ip}. Proceeding to send command.")
+                # Send the command with 'nohup' and '&' for backgrounding
                 full_command = f"nohup {command} &"
                 logging.info(f"Sending command to {ip} via Telnet: {full_command}")
                 tn.write(full_command.encode() + b"\n") # Send command with newline
                 logging.info(f"Command written to {ip}")
 
                 # Read for immediate output after sending command (may contain sudo prompt or errors)
-                # Use expect to look for password prompt or the next shell prompt
+                # Use expect to look for password prompt or the next shell prompt within a shorter timeout
                 sudo_prompt_pattern = b"[sudo] password for " # More specific sudo prompt pattern
                 execution_patterns = [sudo_prompt_pattern] + shell_prompt_patterns
-                logging.info(f"Checking for sudo prompt or next shell prompt on {ip}...")
+                logging.info(f"Checking for sudo prompt or next shell prompt on {ip} after sending command...")
                 index, match, response_after_cmd = tn.expect(execution_patterns, timeout=5) # Shorter timeout for prompt after cmd
                 logging.info(f"Read from {ip} (after sending command): {response_after_cmd.decode(errors='ignore')}")
 
@@ -200,12 +200,18 @@ class DatabaseManager:
                     if password:
                         tn.write((password + "\n").encode())
                         logging.info(f"Sent sudo password to {ip} after command.")
-                        # Read until the next shell prompt after sending sudo password
+                        # Read for immediate output after sending sudo password and wait for next prompt
+                        time.sleep(1) # Small delay to allow output
+                        immediate_output_after_sudo = tn.read_very_eager()
+                        if immediate_output_after_sudo:
+                             logging.info(f"Immediate output from {ip} after sudo password: {immediate_output_after_sudo.decode(errors='ignore')}")
+
                         logging.info(f"Waiting for shell prompt after sudo password on {ip}...")
                         index, match, response_after_sudo_password = tn.expect(shell_prompt_patterns, timeout=5)
-                        logging.info(f"Read from {ip} (after sudo password): {response_after_sudo_password.decode(errors='ignore')}")
+                        logging.info(f"Read from {ip} (after waiting for prompt after sudo password): {response_after_sudo_password.decode(errors='ignore')}")
+
                         if match:
-                            logging.info(f"Shell prompt detected after sudo password on {ip}. Command likely executing.")
+                            logging.info(f"Shell prompt detected after sudo password on {ip}. Command likely executing in background.")
                             return tn # Return session if prompt reached
                         else:
                             logging.error(f"Could not detect shell prompt after sending sudo password on {ip}. Command may not have executed.")
@@ -217,6 +223,11 @@ class DatabaseManager:
                         return None
                 elif match: # Matched a shell prompt immediately after sending command (no sudo prompt)
                      logging.info(f"Shell prompt detected immediately after sending command on {ip}. Command likely backgrounded.")
+                     # Read for any immediate output (like hping3 startup messages)
+                     time.sleep(1) # Small delay to allow output
+                     immediate_output = tn.read_very_eager()
+                     if immediate_output:
+                          logging.info(f"Immediate output from {ip} after command: {immediate_output.decode(errors='ignore')}")
                      return tn # Return session if prompt reached
                 else:
                     logging.error(f"Could not detect sudo prompt or shell prompt after sending command on {ip}. Session may be unstable or command failed.")
@@ -224,7 +235,7 @@ class DatabaseManager:
                     return None
 
             else:
-                 logging.error(f"Could not detect initial shell prompt on {ip}. Cannot send command.")
+                 logging.error(f"Could not detect initial shell prompt on {ip} after login. Cannot send command.")
                  tn.close()
                  return None
 
