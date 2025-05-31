@@ -221,10 +221,14 @@ class DatabaseManager:
                                 if password:
                                     tn.write((password + "\n").encode())
                                     logging.info(f"Sent sudo password to {ip}.")
+                                    # Add a small delay after sending the sudo password
+                                    time.sleep(1) # Added delay after sending sudo password
+                                    logging.info(f"Waited 1 second after sending sudo password to {ip}.")
+
                                     # After sending sudo password, expect hping3 output or shell prompt
                                     logging.info(f"Waiting for hping3 output or shell prompt after sudo password on {ip}...")
                                     execution_patterns_after_sudo = hping3_startup_patterns + shell_prompt_patterns
-                                    index_after_sudo, match_after_sudo, response_after_sudo = tn.expect(execution_patterns_after_sudo, timeout=20) # Increased timeout
+                                    index_after_sudo, match_after_sudo, response_after_sudo = tn.expect(execution_patterns_after_sudo, timeout=25) # Increased timeout again
                                     logging.info(f"Read from {ip} (after sudo password): {response_after_sudo.decode(errors='ignore')}")
 
                                     if match_after_sudo:
