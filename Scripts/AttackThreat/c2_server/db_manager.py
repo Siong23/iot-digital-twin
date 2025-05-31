@@ -18,7 +18,8 @@ class DatabaseManager:
         """Initialize database tables"""
         conn = self.get_connection()
         cursor = conn.cursor()
-          # Table for compromised devices
+        
+        # Table for compromised devices
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS devices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +32,14 @@ class DatabaseManager:
                 device_type TEXT DEFAULT 'unknown'
             )
         ''')
+        
+        # Check if device_type column exists, if not add it (for backwards compatibility)
+        try:
+            cursor.execute("SELECT device_type FROM devices LIMIT 1")
+        except sqlite3.OperationalError:
+            # Column doesn't exist, add it
+            logging.info("Adding device_type column to devices table")
+            cursor.execute("ALTER TABLE devices ADD COLUMN device_type TEXT DEFAULT 'unknown'")
         
         # Table for commands
         cursor.execute('''
@@ -96,6 +105,10 @@ class DatabaseManager:
                 return False
             finally:
                 conn.close()
+
+    def add_or_update_device(self, ip, username, password, device_type='unknown'):
+        """Add or update a device (alias for register_device)"""
+        return self.register_device(ip, username, password, device_type)
     
     def update_device_status(self, ip, status):
         """Update device status"""
@@ -158,8 +171,7 @@ class DatabaseManager:
             WHERE port IS NOT NULL
             GROUP BY ip, port, service
             ORDER BY timestamp DESC
-            LIMIT ?
-        ''', (limit,))
+            LIMIT ?        ''', (limit,))
         results = []
         for row in cursor.fetchall():
             results.append(dict(row))
@@ -179,23 +191,29 @@ class DatabaseManager:
             
         return dict(device)
         
-    def add_scan_result(self, ip, port, service, credentials=None):
+    def add_scan_result(self, ip, port, service, credentials=None, state=None):
         """Add scan result to the database"""
         with self.db_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
             try:
+                # Store state in credentials field if provided, otherwise use credentials
+                stored_info = state if state else credentials
                 cursor.execute('''
                     INSERT INTO attack_logs (ip, port, service, credentials, timestamp)
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ''', (ip, port, service, credentials))
+                ''', (ip, port, service, stored_info))
                 conn.commit()
-                logging.info(f"Database: Added scan result for {ip}:{port} ({service})")
+                if state:
+                    logging.info(f"Database: Added scan result for {ip}:{port} ({service}) - {state}")
+                else:
+                    logging.info(f"Database: Added scan result for {ip}:{port} ({service})")
                 return True
             except Exception as e:
                 logging.error(f"Database error adding scan result for {ip}:{port}: {e}")
                 return False
             finally:
+                conn.close()
                 conn.close()
     
     def update_attack_status(self, attack_id=None, bot_ip=None, status='stopped'):

