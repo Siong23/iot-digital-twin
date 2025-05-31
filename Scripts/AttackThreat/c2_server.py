@@ -150,12 +150,12 @@ class DatabaseManager:
         tn = None # Initialize tn to None
         try:
             logging.info(f"Attempting Telnet connection to {ip}:23")
-            tn = telnetlib.Telnet(ip, 23, timeout=20) # Increased timeout for connection
+            tn = telnetlib.Telnet(ip, 23, timeout=25) # Increased timeout for connection
             logging.info(f"Telnet connection to {ip} established.")
 
             # Read until login prompt (handle common variations)
             login_prompt_patterns = [b"login: ", b"Username: "]
-            index, match, login_response = tn.expect(login_prompt_patterns, timeout=10)
+            index, match, login_response = tn.expect(login_prompt_patterns, timeout=15)
             logging.info(f"Read from {ip} (login prompt): {login_response.decode(errors='ignore')}")
 
             if match:
@@ -164,7 +164,7 @@ class DatabaseManager:
 
                 # Read until password prompt (handle common variations)
                 password_prompt_patterns = [b"Password: ", b"password: "]
-                index, match, password_response = tn.expect(password_prompt_patterns, timeout=5)
+                index, match, password_response = tn.expect(password_prompt_patterns, timeout=10)
                 logging.info(f"Read from {ip} (password prompt): {password_response.decode(errors='ignore')}")
 
                 if match:
@@ -178,7 +178,7 @@ class DatabaseManager:
                     # Wait for initial shell prompt after successful login (handle common variations)
                     shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"] # More robust prompt matching including newline
                     logging.info(f"Waiting for initial shell prompt on {ip}...")
-                    index, match, initial_shell_response = tn.expect(shell_prompt_patterns, timeout=10) # Increased timeout for prompt
+                    index, match, initial_shell_response = tn.expect(shell_prompt_patterns, timeout=15)
                     logging.info(f"Read from {ip} (initial shell prompt): {initial_shell_response.decode(errors='ignore')}")
 
                     if match:
@@ -195,7 +195,7 @@ class DatabaseManager:
                         sudo_prompt_pattern = b"[sudo] password for " # More specific sudo prompt pattern
                         execution_patterns = [sudo_prompt_pattern] + hping3_startup_patterns
                         logging.info(f"Checking for sudo prompt or hping3 output on {ip} after sending command...")
-                        index, match, response_after_cmd = tn.expect(execution_patterns, timeout=5) # Shorter timeout for prompt/output after cmd
+                        index, match, response_after_cmd = tn.expect(execution_patterns, timeout=10)
                         logging.info(f"Read from {ip} (after sending command): {response_after_cmd.decode(errors='ignore')}")
 
                         if match and match.group(0) == sudo_prompt_pattern:
@@ -205,7 +205,7 @@ class DatabaseManager:
                                 logging.info(f"Sent sudo password to {ip} after command.")
                                 # After sending sudo password, expect hping3 output
                                 logging.info(f"Waiting for hping3 output after sudo password on {ip}...")
-                                index, match, response_after_sudo = tn.expect(hping3_startup_patterns, timeout=5)
+                                index, match, response_after_sudo = tn.expect(hping3_startup_patterns, timeout=10)
                                 logging.info(f"Read from {ip} (after sudo password): {response_after_sudo.decode(errors='ignore')}")
 
                                 if match:
@@ -269,7 +269,7 @@ class DatabaseManager:
                     tn.close()
                 except:
                     pass
-            return None
+            return False
 
     def stop_telnet_session(self, ip, tn):
         """Send stop signals and close the Telnet session."""
@@ -284,7 +284,7 @@ class DatabaseManager:
             # After Ctrl+C, expect the shell prompt to reappear
             shell_prompt_patterns = [b"\r\n$", b"\n$", b"\r\n#", b"\n#", b"\r\n>", b"\n>"]
             logging.info(f"Waiting for shell prompt after sending Ctrl+C on {ip}...")
-            index, match, response_after_ctrlc = tn.expect(shell_prompt_patterns, timeout=5)
+            index, match, response_after_ctrlc = tn.expect(shell_prompt_patterns, timeout=10)
             logging.info(f"Read from {ip} (after Ctrl+C): {response_after_ctrlc.decode(errors='ignore')}")
 
             success = False
@@ -304,7 +304,7 @@ class DatabaseManager:
                  # Check for password prompt or prompt after pkill
                  sudo_prompt_pattern = b"[sudo] password for "
                  pkill_response_patterns = [sudo_prompt_pattern] + shell_prompt_patterns
-                 index, match, response_after_pkill = tn.expect(pkill_response_patterns, timeout=3)
+                 index, match, response_after_pkill = tn.expect(pkill_response_patterns, timeout=5)
                  logging.info(f"Read from {ip} (after pkill fallback): {response_after_pkill.decode(errors='ignore')}")
 
                  if match and match.group(0) == sudo_prompt_pattern:
