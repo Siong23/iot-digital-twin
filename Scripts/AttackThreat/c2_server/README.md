@@ -1,27 +1,34 @@
-# C2 Server Architecture Documentation
+# Enhanced C2 Server Architecture Documentation
 
 ## Overview
 
-This document describes the architecture and component relationships of the Command and Control (C2) server implementation for the IoT security research project. The server is designed for educational and research purposes in a controlled lab environment.
+This document describes the architecture and component relationships of the enhanced Command and Control (C2) server implementation for the IoT security research project. The server is designed for educational and research purposes in a controlled lab environment.
 
-## Architecture
+## Key Features
 
-The C2 server has been refactored into a modular structure with the following components:
+- **Network Scanning**: Discover potential IoT targets on a network
+- **Telnet Brute-Forcing**: Exploit common IoT default credentials
+- **Device Type Detection**: Identify and categorize IoT device types
+- **Web Dashboard**: Monitor compromised devices and attack status
+- **DDoS Attack Coordination**: Launch and control distributed attacks
+- **Telnet Command Execution**: Send commands to compromised devices
+- **Attack History Tracking**: Monitor and analyze past attack campaigns
 
 ### Directory Structure
 
 ```
 AttackThreat/
-├── bot_client.py       - Bot client implementation
-├── c2_server.py        - Parent runner script
-├── exploit.py          - Exploitation script
-└── c2_server/          - Modular C2 server implementation
-    ├── __init__.py     - Package marker
-    ├── c2_server.py    - Main server application with Flask routes
-    ├── db_manager.py   - Database management
-    ├── tn_manager.py   - Telnet connection management
-    ├── web_ui.py       - Web interface and dashboard
-    └── run_c2.py       - Simple runner script
+├── bot_client.py         - Bot client implementation
+├── c2_server.py          - Parent runner script 
+├── exploit.py            - Exploitation script
+├── run_c2_server.py      - Simple runner script
+├── test_c2_and_exploit.py - Test script for functionality validation
+└── c2_server/            - Modular C2 server implementation
+    ├── __init__.py       - Package marker
+    ├── c2_server.py      - Main server application with Flask routes
+    ├── db_manager.py     - Database management
+    ├── tn_manager.py     - Telnet connection management
+    ├── web_ui.py         - Web interface and dashboard
 ```
 
 ### Component Relationships
@@ -65,6 +72,39 @@ AttackThreat/
    - Attempts to compromise devices using brute force
    - Registers compromised devices with the C2 server
 
+## Component Descriptions
+
+1. **C2 Server (`c2_server/c2_server.py`)**
+   - Flask application with RESTful API endpoints
+   - Manages attack sessions and cleanup
+   - Coordinates distributed attacks
+   - Provides status and history reporting
+
+2. **Database Manager (`c2_server/db_manager.py`)**
+   - Manages SQLite database
+   - Stores device information including device types
+   - Tracks attack history
+   - Records scan results
+
+3. **Telnet Manager (`c2_server/tn_manager.py`)**
+   - Manages telnet connections to compromised devices
+   - Handles device-specific command adaptations
+   - Implements robust telnet session handling
+   - Provides session monitoring and cleanup
+
+4. **Web UI (`c2_server/web_ui.py`)**
+   - Provides web dashboard for visualization
+   - Shows device status and device types
+   - Displays attack history
+   - Includes interactive attack controls
+
+5. **Exploit Script (`exploit.py`)**
+   - Scans networks for vulnerable devices
+   - Performs telnet brute-force attacks
+   - Detects device types based on service fingerprinting
+   - Registers compromised devices with the C2 server
+   - Includes interactive user menu with enhanced reporting
+
 ## API Endpoints
 
 The server exposes the following API endpoints:
@@ -76,6 +116,19 @@ The server exposes the following API endpoints:
 - `/stop-attack` - Stop an ongoing attack
 - `/get-scan-results` - Get scan results from the database
 - `/get-compromised-devices` - Get a list of compromised devices
+- `/add-scan-result` - Submit network scan results
+- `/get-attack-history` - Retrieve attack history
+- `/start-telnet-ddos` - Start a DDoS attack on all devices
+- `/stop-telnet-ddos` - Stop all active attacks
+
+## Device Type Detection
+
+The system now includes device type detection to categorize IoT devices:
+- Camera - IP cameras, webcams, and surveillance systems
+- Router - Network routers and gateways
+- DVR - Digital Video Recorders and NVRs
+- IoT - Generic IoT devices
+- Unknown - Devices that couldn't be categorized
 
 ## Running the Server
 
@@ -99,6 +152,29 @@ python run_c2.py
 ```
 
 Both methods start the server with the same configuration, binding to all interfaces (0.0.0.0) on port 5000.
+
+## Usage
+
+1. Start the C2 server:
+   ```
+   python run_c2_server.py
+   ```
+
+2. Run the exploit script with the C2 server IP:
+   ```
+   python exploit.py --cnc 127.0.0.1 --subnet 192.168.1.0/24
+   ```
+
+3. Use the interactive menu to scan, exploit, and launch attacks.
+
+4. Access the dashboard at http://127.0.0.1:5000 to monitor status.
+
+## Testing
+
+The `test_c2_and_exploit.py` script can be used to validate functionality:
+```
+python test_c2_and_exploit.py 127.0.0.1
+```
 
 ## Security Notice
 

