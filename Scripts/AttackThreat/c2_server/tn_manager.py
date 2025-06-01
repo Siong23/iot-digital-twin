@@ -211,7 +211,9 @@ class TelnetManager:
                 else:
                     return False
                     
-        return False    def _execute_command(self, tn, ip, command, device_type='generic'):
+        return False
+        
+    def _execute_command(self, tn, ip, command, device_type='generic'):
         """Execute command with enhanced verification, sudo handling, and detailed progress monitoring"""
         try:
             logging.info(f"🔄 Step 1: Executing command on {ip}: {command}")
@@ -340,7 +342,9 @@ class TelnetManager:
                 logging.info(f"Closed telnet session for {ip}")
                 del self.active_sessions[ip]
             except Exception as e:
-                logging.error(f"Error closing telnet session for {ip}: {e}")    def _verify_hping_execution_detailed(self, tn, ip):
+                logging.error(f"Error closing telnet session for {ip}: {e}")
+    
+    def _verify_hping_execution_detailed(self, tn, ip):
         """Detailed verification of hping3 command execution with step-by-step logging"""
         try:
             logging.info(f"🔍 Step 6: Starting detailed hping3 verification for {ip}...")

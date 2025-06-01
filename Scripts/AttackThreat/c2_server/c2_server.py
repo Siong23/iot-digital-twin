@@ -7,9 +7,16 @@ from datetime import datetime
 import os
 
 # Import our modules
-from .db_manager import DatabaseManager
-from .tn_manager import TelnetManager
-from .web_ui import render_dashboard, handle_bot_checkin
+# Fix imports to work both as module and direct execution
+try:
+    from .db_manager import DatabaseManager
+    from .tn_manager import TelnetManager
+    from .web_ui import render_dashboard, handle_bot_checkin
+except ImportError:
+    # When running directly
+    from db_manager import DatabaseManager
+    from tn_manager import TelnetManager
+    from web_ui import render_dashboard, handle_bot_checkin
 
 # Configure logging
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'c2_server.log')
