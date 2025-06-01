@@ -684,12 +684,75 @@ HTML_TEMPLATE = '''
                 alert('Error stopping attacks: ' + error);
             });
         }
-        
-        function refreshData(section) {
-            // This would reload the page or fetch new data via AJAX
-            // For simplicity, we'll just reload the page
-            location.reload();
+          function refreshData(section) {
+            if (section === 'attacks' || section === 'all') {
+                refreshActiveAttacks();
+            }
+            if (section === 'all') {
+                // For full refresh, reload the page
+                location.reload();
+            }
         }
+        
+        function refreshActiveAttacks() {
+            fetch('/get-active-attacks')
+                .then(response => response.json())
+                .then(data => {
+                    updateActiveAttacksTable(data.active_attacks);
+                })
+                .catch(error => {
+                    console.error('Error refreshing active attacks:', error);
+                });
+        }
+        
+        function updateActiveAttacksTable(activeAttacks) {
+            const tableBody = document.querySelector('.section:has(.section-header span:contains("Active Attacks")) tbody');
+            if (!tableBody) return;
+            
+            // Clear existing rows
+            tableBody.innerHTML = '';
+            
+            if (Object.keys(activeAttacks).length === 0) {
+                const noDataDiv = document.querySelector('.section:has(.section-header span:contains("Active Attacks")) .section-body');
+                if (noDataDiv) {
+                    noDataDiv.innerHTML = '<div class="no-data"><p>No active attacks running.</p></div>';
+                }
+                return;
+            }
+            
+            // Add new rows
+            Object.entries(activeAttacks).forEach(([ip, attack]) => {
+                const row = document.createElement('tr');
+                
+                // Calculate duration
+                const durationSeconds = attack.duration_seconds;
+                let duration;
+                if (durationSeconds < 60) {
+                    duration = `${Math.floor(durationSeconds)} seconds`;
+                } else if (durationSeconds < 3600) {
+                    duration = `${Math.floor(durationSeconds / 60)} minutes`;
+                } else {
+                    duration = `${Math.floor(durationSeconds / 3600)} hours`;
+                }
+                
+                row.innerHTML = `
+                    <td>${ip}</td>
+                    <td>${attack.target}</td>
+                    <td><span class="badge badge-danger">${attack.type}</span></td>
+                    <td>${new Date(attack.start_time).toLocaleString()}</td>
+                    <td>${duration}</td>
+                    <td>
+                        <button class="btn btn-stop" onclick="stopAttack('${ip}')">
+                            Stop
+                        </button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+        
+        // Auto-refresh active attacks every 5 seconds
+        setInterval(refreshActiveAttacks, 5000);
     </script>
 </body>
 </html>
