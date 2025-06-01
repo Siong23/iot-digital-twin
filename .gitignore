@@ -1,4 +1,4 @@
-# Python bytecode
+# Python bytecode and cache
 __pycache__/
 *.py[cod]
 *$py.class
@@ -13,12 +13,58 @@ __pycache__/
 *.log
 
 # Virtual environment
+.venv/
 venv/
 env/
 ENV/
+.env
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
 
 # System files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # IDE files
@@ -26,25 +72,14 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+*~
 
-# IoT Digital Twin - Exclude testing and development files
-Scripts/AttackThreat/testing/
-Scripts/AttackThreat/logs/
-Scripts/AttackThreat/archive/
-Scripts/AttackThreat/docs/
-Scripts/AttackThreat/scripts/
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# Exclude specific test and development files
-Scripts/AttackThreat/test_*.py
-Scripts/AttackThreat/debug_*.py
-Scripts/AttackThreat/demo_*.py
-Scripts/AttackThreat/organize_files.*
-Scripts/AttackThreat/test_system.*
+# pyenv
+.python-version
 
-# Exclude C2 server runtime files
+# IoT Digital Twin specific exclusions
 Scripts/AttackThreat/c2_server/*.log
 Scripts/AttackThreat/c2_server/*.db
-
-# Exclude batch and shell scripts (except core ones if needed)
-Scripts/AttackThreat/*.bat
-Scripts/AttackThreat/*.sh

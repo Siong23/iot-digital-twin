@@ -787,14 +787,13 @@ HTML_TEMPLATE = '''
                 showNotification(data.message, 'success');
                 refreshData('all');
             })
-            .catch(error => {
-                button.classList.remove('btn-loading');
+            .catch(error => {                button.classList.remove('btn-loading');
                 button.disabled = false;
                 
                 console.error('Error:', error);
                 showNotification('Error stopping attacks: ' + error, 'error');
             });
-        }function refreshData(section) {
+        }        function refreshData(section) {
             // Show loading indicator
             showNotification('Refreshing data...', 'info');
             
@@ -806,48 +805,70 @@ HTML_TEMPLATE = '''
                 refreshActiveAttacks();
             } else if (section === 'all') {
                 // Refresh all sections without page reload
-                refreshDevices();
-                refreshScans();
-                refreshActiveAttacks();
-                updateStats();
+                Promise.all([
+                    fetch('/get-compromised-devices').then(r => r.json()),
+                    fetch('/get-scan-results').then(r => r.json()),
+                    fetch('/get-active-attacks').then(r => r.json())                }).then(([devices, scans, attacks]) => {
+                    updateDevicesTable(devices);
+                    updateScansTable(scans);
+                    updateActiveAttacksTable(attacks.active_attacks);
+                    updateStats();
+                    showNotification('All data refreshed successfully', 'success');
+                }).catch(error => {
+                    console.error('Error refreshing all data:', error);
+                    showNotification('Error refreshing data: ' + error.message, 'error');
+                });
             }
-        }
-          function refreshActiveAttacks() {
+        }function refreshActiveAttacks() {
             fetch('/get-active-attacks')
-                .then(response => response.json())
-                .then(data => {
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })                .then(data => {
                     updateActiveAttacksTable(data.active_attacks);
                     updateStats();
+                    // showNotification('Active attacks refreshed successfully', 'success'); // Comment out to reduce notification spam
                 })
                 .catch(error => {
                     console.error('Error refreshing active attacks:', error);
-                    showNotification('Error refreshing active attacks', 'error');
+                    showNotification('Error refreshing active attacks: ' + error.message, 'error');
                 });
         }
-        
-        function refreshDevices() {
+          function refreshDevices() {
             fetch('/get-compromised-devices')
-                .then(response => response.json())
-                .then(data => {
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })                .then(data => {
                     updateDevicesTable(data);
                     updateStats();
+                    // showNotification('Devices refreshed successfully', 'success'); // Comment out to reduce notification spam
                 })
                 .catch(error => {
                     console.error('Error refreshing devices:', error);
-                    showNotification('Error refreshing devices', 'error');
+                    showNotification('Error refreshing devices: ' + error.message, 'error');
                 });
         }
-        
+
         function refreshScans() {
             fetch('/get-scan-results')
-                .then(response => response.json())
-                .then(data => {
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })                .then(data => {
                     updateScansTable(data);
                     updateStats();
+                    // showNotification('Scan results refreshed successfully', 'success'); // Comment out to reduce notification spam
                 })
                 .catch(error => {
                     console.error('Error refreshing scan results:', error);
-                    showNotification('Error refreshing scan results', 'error');
+                    showNotification('Error refreshing scan results: ' + error.message, 'error');
                 });
         }
         
@@ -862,12 +883,12 @@ HTML_TEMPLATE = '''
                 const onlineCount = devices.filter(d => d.status && d.status.toLowerCase() === 'online').length;
                 const scanCount = scans.length;
                 const activeSessionsCount = attacks.count || 0;
-                
-                // Update stat boxes
+                  // Update stat boxes
                 document.querySelector('.stat-box:nth-child(1) .stat-number').textContent = compromisedCount;
                 document.querySelector('.stat-box:nth-child(2) .stat-number').textContent = onlineCount;
                 document.querySelector('.stat-box:nth-child(3) .stat-number').textContent = scanCount;
-                document.querySelector('.stat-box:nth-child(4) .stat-number').textContent = activeSessionsCount;            }).catch(error => {
+                document.querySelector('.stat-box:nth-child(4) .stat-number').textContent = activeSessionsCount;
+            }).catch(error => {
                 console.error('Error updating stats:', error);
             });
         }
