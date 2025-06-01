@@ -26,3 +26,25 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# IoT Digital Twin - Exclude testing and development files
+Scripts/AttackThreat/testing/
+Scripts/AttackThreat/logs/
+Scripts/AttackThreat/archive/
+Scripts/AttackThreat/docs/
+Scripts/AttackThreat/scripts/
+
+# Exclude specific test and development files
+Scripts/AttackThreat/test_*.py
+Scripts/AttackThreat/debug_*.py
+Scripts/AttackThreat/demo_*.py
+Scripts/AttackThreat/organize_files.*
+Scripts/AttackThreat/test_system.*
+
+# Exclude C2 server runtime files
+Scripts/AttackThreat/c2_server/*.log
+Scripts/AttackThreat/c2_server/*.db
+
+# Exclude batch and shell scripts (except core ones if needed)
+Scripts/AttackThreat/*.bat
+Scripts/AttackThreat/*.sh

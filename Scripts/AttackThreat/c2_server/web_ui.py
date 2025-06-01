@@ -324,11 +324,62 @@ HTML_TEMPLATE = '''
         .badge-info {
             background-color: #17a2b8;
             color: white;
-        }
-        .no-data {
+        }        .no-data {
             padding: 30px;
             text-align: center;
             color: #6c757d;
+        }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 4px;
+            color: white;
+            font-weight: 500;
+            z-index: 1001;
+            min-width: 300px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+        }
+        .notification.success {
+            background-color: #28a745;
+        }
+        .notification.error {
+            background-color: #dc3545;
+        }
+        .notification.info {
+            background-color: #17a2b8;
+        }
+        .notification.warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        .btn-loading {
+            position: relative;
+        }
+        .btn-loading::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            margin: auto;
+            border: 2px solid transparent;
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
         @media (max-width: 768px) {
             .stat-box {
@@ -540,11 +591,13 @@ HTML_TEMPLATE = '''
                 {% endif %}
             </div>
         </div>
-        
-        <div class="footer">
+          <div class="footer">
             <p>IoT Security Research Platform - For Educational Purposes Only</p>
         </div>
     </div>
+    
+    <!-- Notification container -->
+    <div id="notification-container"></div>
     
     <!-- Attack Modal -->
     <div id="attackModal" class="modal">
@@ -573,8 +626,29 @@ HTML_TEMPLATE = '''
             </div>
         </div>
     </div>
-    
-    <script>
+      <script>
+        // Notification system
+        function showNotification(message, type = 'info', duration = 3000) {
+            // Remove existing notifications
+            const existing = document.querySelector('.notification');
+            if (existing) {
+                existing.remove();
+            }
+            
+            // Create new notification
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            // Auto-remove notification
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                }
+            }, duration);
+        }
+        
         // Helper functions for modal
         function openAttackModal() {
             document.getElementById('attackModal').style.display = 'block';
@@ -598,15 +672,19 @@ HTML_TEMPLATE = '''
             // We'll set the bot IP when the form is submitted
             window.selectedBotIp = botIp;
         }
-        
-        function startBulkAttack() {
+          function startBulkAttack() {
             var targetIp = document.getElementById('targetIp').value;
             var attackType = document.getElementById('attackType').value;
             
             if (!targetIp) {
-                alert('Please enter a target IP address');
+                showNotification('Please enter a target IP address', 'error');
                 return;
             }
+            
+            // Show loading state
+            const startButton = document.querySelector('.modal-footer .btn-attack');
+            startButton.classList.add('btn-loading');
+            startButton.disabled = true;
             
             var endpoint = '/start-telnet-ddos';
             var data = {
@@ -620,6 +698,8 @@ HTML_TEMPLATE = '''
                 data.bot_ip = window.selectedBotIp;
             }
             
+            showNotification('Starting attack...', 'info');
+            
             fetch(endpoint, {
                 method: 'POST',
                 headers: {
@@ -629,24 +709,37 @@ HTML_TEMPLATE = '''
             })
             .then(response => response.json())
             .then(data => {
+                // Remove loading state
+                startButton.classList.remove('btn-loading');
+                startButton.disabled = false;
+                
                 if (data.status === 'success') {
-                    alert(data.message);
+                    showNotification(data.message, 'success');
                     closeModal();
                     refreshData('all');
                 } else {
-                    alert('Error: ' + (data.error || 'Unknown error'));
+                    showNotification('Error: ' + (data.error || 'Unknown error'), 'error');
                 }
             })
             .catch(error => {
+                // Remove loading state
+                startButton.classList.remove('btn-loading');
+                startButton.disabled = false;
+                
                 console.error('Error:', error);
-                alert('Error starting attack: ' + error);
+                showNotification('Error starting attack: ' + error, 'error');
             });
             
             // Clear the selected bot
             window.selectedBotIp = null;
         }
-        
-        function stopAttack(botIp) {
+          function stopAttack(botIp) {
+            const button = event.target;
+            button.classList.add('btn-loading');
+            button.disabled = true;
+            
+            showNotification('Stopping attack...', 'info');
+            
             fetch('/stop-attack', {
                 method: 'POST',
                 headers: {
@@ -658,16 +751,28 @@ HTML_TEMPLATE = '''
             })
             .then(response => response.json())
             .then(data => {
-                alert(data.message);
+                button.classList.remove('btn-loading');
+                button.disabled = false;
+                
+                showNotification(data.message, 'success');
                 refreshData('attacks');
             })
             .catch(error => {
+                button.classList.remove('btn-loading');
+                button.disabled = false;
+                
                 console.error('Error:', error);
-                alert('Error stopping attack: ' + error);
+                showNotification('Error stopping attack: ' + error, 'error');
             });
         }
         
         function stopAllAttacks() {
+            const button = event.target;
+            button.classList.add('btn-loading');
+            button.disabled = true;
+            
+            showNotification('Stopping all attacks...', 'info');
+            
             fetch('/stop-telnet-ddos', {
                 method: 'POST',
                 headers: {
@@ -676,33 +781,185 @@ HTML_TEMPLATE = '''
             })
             .then(response => response.json())
             .then(data => {
-                alert(data.message);
+                button.classList.remove('btn-loading');
+                button.disabled = false;
+                
+                showNotification(data.message, 'success');
                 refreshData('all');
             })
             .catch(error => {
+                button.classList.remove('btn-loading');
+                button.disabled = false;
+                
                 console.error('Error:', error);
-                alert('Error stopping attacks: ' + error);
+                showNotification('Error stopping attacks: ' + error, 'error');
             });
-        }
-          function refreshData(section) {
-            if (section === 'attacks' || section === 'all') {
+        }function refreshData(section) {
+            // Show loading indicator
+            showNotification('Refreshing data...', 'info');
+            
+            if (section === 'devices') {
+                refreshDevices();
+            } else if (section === 'scans') {
+                refreshScans();
+            } else if (section === 'attacks') {
                 refreshActiveAttacks();
-            }
-            if (section === 'all') {
-                // For full refresh, reload the page
-                location.reload();
+            } else if (section === 'all') {
+                // Refresh all sections without page reload
+                refreshDevices();
+                refreshScans();
+                refreshActiveAttacks();
+                updateStats();
             }
         }
-        
-        function refreshActiveAttacks() {
+          function refreshActiveAttacks() {
             fetch('/get-active-attacks')
                 .then(response => response.json())
                 .then(data => {
                     updateActiveAttacksTable(data.active_attacks);
+                    updateStats();
                 })
                 .catch(error => {
                     console.error('Error refreshing active attacks:', error);
+                    showNotification('Error refreshing active attacks', 'error');
                 });
+        }
+        
+        function refreshDevices() {
+            fetch('/get-compromised-devices')
+                .then(response => response.json())
+                .then(data => {
+                    updateDevicesTable(data);
+                    updateStats();
+                })
+                .catch(error => {
+                    console.error('Error refreshing devices:', error);
+                    showNotification('Error refreshing devices', 'error');
+                });
+        }
+        
+        function refreshScans() {
+            fetch('/get-scan-results')
+                .then(response => response.json())
+                .then(data => {
+                    updateScansTable(data);
+                    updateStats();
+                })
+                .catch(error => {
+                    console.error('Error refreshing scan results:', error);
+                    showNotification('Error refreshing scan results', 'error');
+                });
+        }
+        
+        function updateStats() {
+            // Update the statistics boxes at the top
+            Promise.all([
+                fetch('/get-compromised-devices').then(r => r.json()),
+                fetch('/get-active-attacks').then(r => r.json()),
+                fetch('/get-scan-results').then(r => r.json())
+            ]).then(([devices, attacks, scans]) => {
+                const compromisedCount = devices.length;
+                const onlineCount = devices.filter(d => d.status && d.status.toLowerCase() === 'online').length;
+                const scanCount = scans.length;
+                const activeSessionsCount = attacks.count || 0;
+                
+                // Update stat boxes
+                document.querySelector('.stat-box:nth-child(1) .stat-number').textContent = compromisedCount;
+                document.querySelector('.stat-box:nth-child(2) .stat-number').textContent = onlineCount;
+                document.querySelector('.stat-box:nth-child(3) .stat-number').textContent = scanCount;
+                document.querySelector('.stat-box:nth-child(4) .stat-number').textContent = activeSessionsCount;            }).catch(error => {
+                console.error('Error updating stats:', error);
+            });
+        }
+        
+        function updateDevicesTable(devices) {
+            const tbody = document.querySelector('.section:first-of-type table tbody');
+            const sectionBody = document.querySelector('.section:first-of-type .section-body');
+            
+            if (!tbody || !sectionBody) return;
+            
+            if (devices.length === 0) {
+                sectionBody.innerHTML = '<div class="no-data"><p>No compromised devices found. Run the exploit script to compromise devices.</p></div>';
+                return;
+            }
+            
+            // Clear existing rows
+            tbody.innerHTML = '';
+            
+            devices.forEach(device => {
+                const row = document.createElement('tr');
+                const statusClass = device.status ? device.status.toLowerCase() : 'offline';
+                const deviceType = device.device_type || 'unknown';
+                
+                row.innerHTML = `
+                    <td>${device.ip || 'N/A'}</td>
+                    <td>${device.username || 'N/A'}</td>
+                    <td>${device.password || 'N/A'}</td>
+                    <td>
+                        <span class="status-${statusClass}">
+                            <span class="status-indicator"></span>
+                            ${device.status || 'Offline'}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="device-type ${deviceType}">
+                            ${deviceType}
+                        </span>
+                    </td>
+                    <td>${device.last_seen || 'Never'}</td>
+                    <td>
+                        <button class="btn btn-attack" onclick="startAttack('${device.ip}')" 
+                                ${statusClass !== 'online' ? 'disabled class="btn-disabled"' : ''}>
+                            Attack
+                        </button>
+                        <button class="btn btn-stop" onclick="stopAttack('${device.ip}')">
+                            Stop
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+            
+            // Show table if it was hidden
+            if (sectionBody.innerHTML.includes('no-data')) {
+                sectionBody.innerHTML = '<table><thead><tr><th>IP Address</th><th>Username</th><th>Password</th><th>Status</th><th>Device Type</th><th>Last Seen</th><th>Actions</th></tr></thead><tbody></tbody></table>';
+                updateDevicesTable(devices); // Recursive call to populate
+            }
+        }
+        
+        function updateScansTable(scans) {
+            const tbody = document.querySelector('.section:nth-of-type(2) table tbody');
+            const sectionBody = document.querySelector('.section:nth-of-type(2) .section-body');
+            
+            if (!tbody || !sectionBody) return;
+            
+            if (scans.length === 0) {
+                sectionBody.innerHTML = '<div class="no-data"><p>No scan results available. Run the exploit script to scan the network.</p></div>';
+                return;
+            }
+            
+            // Clear existing rows
+            tbody.innerHTML = '';
+            
+            scans.forEach(scan => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${scan.ip || 'N/A'}</td>
+                    <td>${scan.port || 'N/A'}</td>
+                    <td>${scan.service || 'N/A'}</td>
+                    <td>${scan.timestamp || 'N/A'}</td>
+                    <td>
+                        <span class="badge badge-warning">Vulnerable</span>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+            
+            // Show table if it was hidden
+            if (sectionBody.innerHTML.includes('no-data')) {
+                sectionBody.innerHTML = '<table><thead><tr><th>IP Address</th><th>Port</th><th>Service</th><th>Timestamp</th><th>Status</th></tr></thead><tbody></tbody></table>';
+                updateScansTable(scans); // Recursive call to populate
+            }
         }
         
         function updateActiveAttacksTable(activeAttacks) {
@@ -750,9 +1007,14 @@ HTML_TEMPLATE = '''
                 tableBody.appendChild(row);
             });
         }
+          // Auto-refresh active attacks every 10 seconds (reduced frequency)
+        setInterval(refreshActiveAttacks, 10000);
         
-        // Auto-refresh active attacks every 5 seconds
-        setInterval(refreshActiveAttacks, 5000);
+        // Auto-refresh stats every 30 seconds
+        setInterval(updateStats, 30000);
+        
+        // Initial load of stats after page loads
+        setTimeout(updateStats, 1000);
     </script>
 </body>
 </html>
