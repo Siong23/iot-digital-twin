@@ -10,12 +10,6 @@ These credentials are used for security research and penetration testing in cont
 # Comprehensive IoT Device Credentials Database
 # Format: (username, password, device_description)
 IOT_CREDENTIALS = [
-    # Lab/Target Specific Credentials (High Priority)
-    ("ipcamadmin", "admin"),      # Digital IPCam credentials
-    ("temphumidadmin", "admin"),  # Digital TempHumidSensor credentials
-    ("temphumid", "digital"),
-    ("sensor", "temphumid"),
-    
     # Generic/Common Credentials
     ("admin", "admin"),
     ("admin", "password"),
@@ -118,8 +112,7 @@ IOT_CREDENTIALS = [
     ("supervisor", "supervisor"),
     ("tech", "tech"),
     ("operator", "operator"),
-    
-    # DVR/NVR Credentials
+      # DVR/NVR Credentials
     ("admin", "admin"),
     ("admin", "12345"),
     ("admin", "123456"),
@@ -132,6 +125,13 @@ IOT_CREDENTIALS = [
     ("666666", "666666"),
     ("abc123", "abc123"),
     ("admin", "abc123"),
+    
+    # Lab/Target Specific Credentials (Positioned midway through dictionary)
+    ("ipcamadmin", "admin"),      # Digital IPCam credentials
+    ("temphumidadmin", "admin"),  # Digital TempHumidSensor credentials
+    ("temphumid", "digital"),
+    ("sensor", "temphumid"),
+    
     ("admin", "1111"),
     ("admin", "1111111"),
     ("admin", "54321"),
@@ -309,9 +309,9 @@ def get_device_specific_credentials(device_type):
     """
     device_keywords = {
         'router': ['cisco', 'netgear', 'dlink', 'asus', 'linksys', 'tplink', 'belkin', 'buffalo'],
-        'camera': ['admin', 'root', 'user', 'viewer', 'camera', 'ubnt', 'service'],
+        'camera': ['admin', 'root', 'user', 'viewer', 'camera', 'ubnt', 'service', 'ipcamadmin'],
         'dvr': ['admin', 'root', '888888', '666666', 'abc123', 'default', 'dvr'],
-        'iot': ['pi', 'ubuntu', 'debian', 'iot', 'device', 'smart', 'sensor', 'temphumid'],
+        'iot': ['pi', 'ubuntu', 'debian', 'iot', 'device', 'smart', 'sensor', 'temphumid', 'temphumidadmin'],
         'printer': ['admin', 'service', 'tech'],
         'nas': ['admin', 'nas', 'qnap', 'synology', 'drobo'],
     }
