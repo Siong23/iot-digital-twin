@@ -96,6 +96,12 @@ iot-digital-twin/
 │       ├── credentials.py   # Credential management
 │       ├── requirements.txt # Python dependencies
 │       ├── README.md        # Framework documentation
+│       ├── TESTING_RESULTS.md # Latest testing documentation
+│       ├── test_registration_verification.py # Registration tests
+│       ├── test_registration_verification.py # Basic registration tests
+│       ├── test_registration_fix.py # Registration fix tests  
+│       ├── test_ddos_comprehensive.py # DDoS analysis tests
+│       ├── run_tests.py     # Test suite runner
 │       └── c2_server/       # Command & Control server
 │           ├── c2_server.py    # Main C2 server
 │           ├── web_ui.py       # Web dashboard
@@ -112,12 +118,22 @@ iot-digital-twin/
 - **Credential Brute-forcing**: Telnet authentication bypass
 - **Botnet Simulation**: Compromised device management
 - **DDoS Coordination**: Distributed attack orchestration
+- **Registration Verification**: Device synchronization monitoring
+- **Attack Effectiveness Analysis**: Real-time attack readiness assessment
 
 ### C2 Dashboard
 - **Real-time Monitoring**: Live device status tracking
 - **Attack Management**: Start/stop attacks remotely
 - **Device Analytics**: Compromise statistics and metrics
+- **Registration Status**: Device registration health monitoring
 - **Web Interface**: Modern, responsive control panel
+
+### Registration Verification System
+- **Synchronization Detection**: Identifies local/remote device discrepancies
+- **Error Analysis**: Categorizes and tracks registration failures
+- **Impact Assessment**: Measures effect on DDoS attack effectiveness
+- **Automated Re-registration**: Attempts to fix failed device registrations
+- **Comprehensive Reporting**: Detailed analysis and recommendations
 
 ### MQTT Integration
 - **Broker Setup**: Secure MQTT communication
@@ -131,6 +147,35 @@ iot-digital-twin/
 - Attack pattern analysis
 - Security control validation
 - Incident response training
+- Device registration synchronization research
+- DDoS attack effectiveness measurement
+- Botnet coordination analysis
+
+## 🧪 Testing and Validation
+
+The platform includes comprehensive testing tools:
+
+### Quick Test Suite
+```bash
+cd Scripts/AttackThreat
+python run_tests.py                      # Run all tests
+```
+
+### Individual Tests
+```bash
+python test_registration_verification.py  # Basic registration tests
+python test_registration_fix.py          # Registration fix validation  
+python test_ddos_comprehensive.py        # Complete DDoS analysis
+```
+
+### Test Coverage
+- **Device synchronization** between local tracking and C2 server
+- **Registration failure** detection and analysis
+- **DDoS attack effectiveness** measurement with registration issues
+- **Error categorization** and troubleshooting recommendations
+- **System resilience** under various failure scenarios
+
+See `TESTING_RESULTS.md` for detailed test results and validation reports.
 
 ## 📚 Documentation
 

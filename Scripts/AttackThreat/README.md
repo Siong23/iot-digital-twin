@@ -13,6 +13,8 @@ This software is designed for educational and research purposes in controlled la
 1. **C2 Server** (`c2_server/`) - Central command server with web interface
 2. **Exploit Script** (`exploit.py`) - Network scanning and device exploitation
 3. **Bot Client** (`bot_client.py`) - Simulated IoT bot for testing
+4. **Registration Verification System** - Device synchronization monitoring
+5. **Testing Suite** - Comprehensive validation and analysis tools
 
 ## Quick Start
 
@@ -111,6 +113,7 @@ AttackThreat/
 
 ### Testing the System
 
+#### Basic System Tests
 ```bash
 # Linux
 ./test_system.sh
@@ -119,6 +122,24 @@ AttackThreat/
 python -c "import exploit; print('✅ exploit.py OK')"
 python -c "import c2_server.web_ui; print('✅ web_ui.py OK')"
 ```
+
+#### Registration Verification Tests
+```bash
+# Test registration verification system
+python test_registration_verification.py
+
+# Test registration fix functionality  
+python test_registration_fix.py
+
+# Comprehensive DDoS attack analysis
+python test_ddos_comprehensive.py
+```
+
+#### Test Results
+- See `TESTING_RESULTS.md` for detailed test validation reports
+- Tests verify device synchronization between local tracking and C2 server
+- Validates DDoS attack effectiveness measurement
+- Confirms registration issue detection and resolution
 
 ### Database Schema
 

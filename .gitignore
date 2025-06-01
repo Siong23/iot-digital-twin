@@ -83,3 +83,28 @@ Thumbs.db
 # IoT Digital Twin specific exclusions
 Scripts/AttackThreat/c2_server/*.log
 Scripts/AttackThreat/c2_server/*.db
+Scripts/AttackThreat/*.log
+Scripts/AttackThreat/results/
+
+# Test artifacts and temporary files
+test_results/
+*_test_results.json
+*_test_output.txt
+test_registration_*.json
+test_ddos_*.json
+registration_verification_output.txt
+
+# Temporary development files
+*_temp.py
+*_debug.py
+*_test_*.py
+clean_*.py
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Runtime and session files
+*.pid
+*.session
