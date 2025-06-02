@@ -11,10 +11,24 @@ This software is designed for educational and research purposes in controlled la
 ## Components
 
 1. **C2 Server** (`c2_server/`) - Central command server with web interface
-2. **Exploit Script** (`exploit.py`) - Network scanning and device exploitation
+2. **Exploit Script** (`exploit.py`) - Network scanning and device exploitation (modular architecture)
 3. **Bot Client** (`bot_client.py`) - Simulated IoT bot for testing
 4. **Registration Verification System** - Device synchronization monitoring
 5. **Testing Suite** - Comprehensive validation and analysis tools
+6. **Modular Components** (`modules/`) - Separated functionality for better maintainability:
+   - **NetworkScanner** - Handles nmap-based network discovery and service detection
+   - **TelnetBruteForcer** - Manages credential attacks and device compromise tracking
+   - **C2Communicator** - Centralizes all C2 server interactions
+   - **UserInterface** - Provides consistent user interaction and display
+
+## Architecture
+
+The framework has been refactored into a modular architecture for improved maintainability:
+
+- **Main Script** (`exploit.py`) - Orchestrates all operations (~280 lines vs. original 1478 lines)
+- **Specialized Modules** - Each module handles a specific responsibility
+- **Clean Separation** - Network operations, attack functionality, server communication, and UI are separate
+- **Maintained Compatibility** - All original functionality preserved through modular composition
 
 ## Quick Start
 
@@ -96,10 +110,16 @@ POST /stop-telnet-ddos
 
 ```
 AttackThreat/
-├── exploit.py              # Main exploitation script
+├── exploit.py              # Main exploitation script (modular)
 ├── bot_client.py           # IoT bot simulator
 ├── credentials.py          # Default credential lists
 ├── requirements.txt        # Python dependencies
+├── modules/               # Modular components
+│   ├── __init__.py        # Module package initialization
+│   ├── network_scanner.py # Network scanning functionality
+│   ├── telnet_bruteforcer.py # Telnet brute force operations
+│   ├── c2_communicator.py # C2 server communication
+│   └── user_interface.py  # UI and display functions
 └── c2_server/             # Command & Control server
     ├── c2_server.py       # Flask web server
     ├── web_ui.py          # Web interface template

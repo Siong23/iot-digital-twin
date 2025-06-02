@@ -18,8 +18,8 @@ from datetime import datetime
 def run_test(test_file, description):
     """Run a single test and return the result"""
     print(f"\n{'='*60}")
-    print(f"🧪 Running: {description}")
-    print(f"📝 File: {test_file}")
+    print(f"[TEST] Running: {description}")
+    print(f"[FILE] File: {test_file}")
     print('='*60)
     
     try:
@@ -34,16 +34,16 @@ def run_test(test_file, description):
             
         return result.returncode == 0
     except subprocess.TimeoutExpired:
-        print("❌ Test timed out after 120 seconds")
+        print("[TIMEOUT] Test timed out after 120 seconds")
         return False
     except Exception as e:
-        print(f"❌ Error running test: {e}")
+        print(f"[ERROR] Error running test: {e}")
         return False
 
 def main():
     """Run all registration verification tests"""
-    print("🚀 IoT Digital Twin - Registration Verification Test Suite")
-    print(f"📅 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("[SUITE] IoT Digital Twin - Registration Verification Test Suite")
+    print(f"[TIME] Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*80)
     
     # Change to the correct directory
@@ -62,28 +62,28 @@ def main():
             success = run_test(test_file, description)
             results.append((test_file, description, success))
         else:
-            print(f"⚠️  Test file not found: {test_file}")
+            print(f"[WARNING] Test file not found: {test_file}")
             results.append((test_file, description, False))
     
     # Print summary
     print("\n" + "="*80)
-    print("📊 TEST SUITE SUMMARY")
+    print("[SUMMARY] TEST SUITE SUMMARY")
     print("="*80)
     
     passed = sum(1 for _, _, success in results if success)
     total = len(results)
     
     for test_file, description, success in results:
-        status = "✅ PASS" if success else "❌ FAIL"
+        status = "[PASS]" if success else "[FAIL]"
         print(f"{status} - {description}")
     
-    print(f"\n🎯 Results: {passed}/{total} tests passed")
+    print(f"\n[RESULTS] Results: {passed}/{total} tests passed")
     
     if passed == total:
-        print("🎉 ALL TESTS PASSED - Registration verification system is working correctly!")
+        print("[SUCCESS] ALL TESTS PASSED - Registration verification system is working correctly!")
         return 0
     else:
-        print("⚠️  Some tests failed - Check the output above for details")
+        print("[WARNING] Some tests failed - Check the output above for details")
         return 1
 
 if __name__ == "__main__":

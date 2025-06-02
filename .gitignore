@@ -108,3 +108,20 @@ clean_*.py
 # Runtime and session files
 *.pid
 *.session
+
+# Development and debugging files
+check_*.py
+debug_*.py
+fix_*.py
+simple_analyze.py
+temp_*.py
+temp_*.txt
+test_class_*.py
+*_original_backup.py
+*_backup.py
+analyze_*.py
+
+# Module testing files (keep main test files but exclude granular test files)
+test_ddos_comprehensive.py
+test_registration_fix.py
+test_registration_verification.py
