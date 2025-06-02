@@ -221,8 +221,7 @@
                         <th>Vulnerability</th>
                     </tr>
                 </thead>
-                <tbody>
-                    {% for scan in recent_scans %}
+                <tbody>                    {% for scan in recent_scans %}
                     <tr>
                         <td>{{ scan.target_ip }}</td>
                         <td>{{ scan.scan_time }}</td>

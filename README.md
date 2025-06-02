@@ -24,6 +24,9 @@ The IoT Digital Twin Security Testbed allows you to:
 │   └── exploit/            # Exploitation tools
 │       ├── exploit.py      # Main exploit framework
 │       └── ...             # Various attack modules
+├── README.md               # Main project documentation
+├── USAGE.md                # Detailed usage instructions
+└── .gitignore              # Git ignore configuration
 ```
 
 ## Prerequisites
@@ -205,6 +208,16 @@ If you encounter an "Error loading dashboard: dashboard.html" when accessing the
    - Check dependencies installation
    - Verify network connectivity between attack nodes and targets
    - Review C2 server logs for error messages
+
+## Usage
+
+For detailed instructions on how to use the IoT Digital Twin Security Testbed, please refer to the [USAGE.md](USAGE.md) file, which includes:
+
+- How to start the C2 server
+- How to register attack bots
+- How to launch DDoS attacks
+- How to use the demo environment
+- Security warnings and best practices
 
 ## References
 

