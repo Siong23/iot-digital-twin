@@ -1,0 +1,3 @@
+python-nmap>=1.4.6
+paramiko>=2.7.2
+telnetlib3>=1.0.2

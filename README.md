@@ -1,226 +1,210 @@
-# IoT Digital Twin Security Testbed for GNS3
+# IoT Digital Twin Security Testbed
 
-## Overview
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-brightgreen)](https://python.org)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey)](https://github.com)
 
-This repository provides a comprehensive IoT digital twin environment for security testing and research using GNS3. The project enables researchers and security professionals to simulate IoT networks, deploy attack vectors, and analyze vulnerabilities in a controlled environment.
+## ⚠️ **IMPORTANT DISCLAIMER**
 
-The IoT Digital Twin Security Testbed allows you to:
-- Create realistic IoT network topologies in GNS3
-- Deploy MQTT-based communication between IoT devices
-- Simulate various attack scenarios (DDoS, credential harvesting, etc.)
-- Test security measures and defensive strategies
-- Analyze network traffic patterns in a controlled environment
+This project is designed for **educational and research purposes only**. It is intended for use in isolated laboratory environments to help security researchers, students, and professionals understand IoT vulnerabilities and develop defensive strategies.
 
-## Repository Structure
+**DO NOT USE ON PRODUCTION SYSTEMS OR NETWORKS YOU DO NOT OWN**
+
+## 📋 Overview
+
+This repository provides a comprehensive IoT digital twin environment for security testing and vulnerability research. The project enables researchers and security professionals to simulate IoT networks, deploy attack vectors, and analyze vulnerabilities in a controlled environment.
+
+### Key Features
+
+- **IoT Device Simulation**: MQTT-based communication system for simulating IoT devices
+- **Attack Simulation Framework**: Comprehensive threat simulation tools
+- **Network Vulnerability Assessment**: Automated scanning and exploitation tools
+- **Command & Control Infrastructure**: Simulated botnet management capabilities
+- **Educational Research Tools**: Comprehensive logging and analysis features
+
+## 🏗️ Project Structure
 
 ```
-├── Agent/                  # IoT device agents
-│   ├── mqttbroker.py       # MQTT broker implementation
-│   └── publish.py          # MQTT publishing utilities
-├── AttackBots/             # Attack simulation tools
-│   ├── c2_server/          # Command & Control server
-│   │   ├── c2_server.py    # Main C2 server implementation
-│   │   └── ...             # Supporting modules
-│   └── exploit/            # Exploitation tools
-│       ├── exploit.py      # Main exploit framework
-│       └── ...             # Various attack modules
-├── README.md               # Main project documentation
-├── USAGE.md                # Detailed usage instructions
-└── .gitignore              # Git ignore configuration
+iot-digital-twin/
+├── Agent/                     # IoT Device Agents & Communication
+│   ├── mqttbroker.py         # MQTT broker implementation
+│   └── publish.py            # MQTT publishing utilities
+├── AttackThreat/             # Attack Simulation Framework
+│   ├── main.py               # Main attack simulation controller
+│   ├── requirements.txt      # Python dependencies
+│   ├── research_db.sqlite    # Attack research database
+│   ├── setup.py              # Package setup configuration
+│   ├── QUICKSTART.md         # Quick start guide
+│   ├── README.md             # Attack framework documentation
+│   ├── bot_templates/        # Bot deployment templates
+│   │   └── bot_client.sh     # Bot client script
+│   └── modules/              # Core attack modules
+│       ├── __init__.py       # Module initialization
+│       ├── bruteforce.py     # Brute force attack implementation
+│       ├── database.py       # Database management
+│       ├── ddos_control.py   # DDoS attack coordination
+│       ├── infection.py      # Bot deployment and infection
+│       ├── scanner.py        # Network scanning utilities
+│       └── utils.py          # Common utilities and helpers
+├── README.md                 # This file
+└── .gitignore               # Git ignore configuration
 ```
 
-## Prerequisites
+## 🚀 Quick Start
 
-- **OS**: Ubuntu 22.04.4 LTS (recommended)
-- **Hardware Requirements**:
-  - CPU with KVM support
-  - Minimum 8GB RAM (16GB+ recommended)
-  - 50GB+ free disk space
-- **Software Dependencies**:
-  - GNS3 (installed on Linux)
-  - Docker
-  - Python 3 with python3-venv package
-  - make, wget, konsole
-  - Cisco 7200 router GNS3 image
-  - Open vSwitch
-  - Ubuntu Server image
-  - Ubuntu Guest Additions
-  - Kali Linux for GNS3
-  - TightVNC
+### Prerequisites
 
-## Installation & Setup
+- **Operating System**: Windows 10/11 or Ubuntu 20.04+
+- **Python**: Version 3.8 or higher
+- **Network**: Isolated lab environment recommended
+- **Dependencies**: See requirements.txt files in each component
 
-### 1. Setting up the Environment
+### Installation
+
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/yourusername/iot-digital-twin.git
+   cd iot-digital-twin
+   ```
+
+2. **Set up Python environment**:
+   ```bash
+   # Create virtual environment
+   python -m venv venv
+   
+   # Activate virtual environment
+   # On Windows:
+   venv\Scripts\activate
+   # On Linux:
+   source venv/bin/activate
+   ```
+
+3. **Install dependencies**:
+   ```bash
+   # Install AttackThreat framework dependencies
+   cd AttackThreat
+   pip install -r requirements.txt
+   cd ..
+   
+   # Install MQTT agent dependencies
+   cd Agent
+   pip install paho-mqtt
+   cd ..
+   ```
+
+### Basic Usage
+
+#### 1. Start MQTT Broker (IoT Communication)
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/iot-digital-twin.git
-cd iot-digital-twin
-
-# Create a virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-### 2. Setting up the MQTT Broker
-
-The MQTT broker serves as the communication backbone for IoT devices in the testbed.
-
-```bash
-# Install dependencies
 cd Agent
-pip install paho-mqtt
-
-# Start the MQTT broker
 python mqttbroker.py
 ```
 
-### 3. Setting up the Attack System
+#### 2. Run Attack Simulation Framework
 
 ```bash
-# Install C2 server dependencies
-cd ../AttackBots/c2_server
-pip install -r requirements.txt
-
-# Install exploit framework dependencies
-cd ../exploit
-pip install -r requirements.txt
+cd AttackThreat
+python main.py
 ```
 
-#### Troubleshooting Installation
+The attack simulation framework provides an interactive menu with the following options:
+- 🔍 Network Discovery Scan
+- 🔓 Brute Force Attack
+- 🦠 Deploy Bot Infection
+- 🚀 Start DDoS Attack
+- ⏹️ Stop DDoS Attack
+- 📊 Show Attack Status
+- 📋 View Database Logs
+- 🧹 Clear Database
 
-If you encounter pip installation errors with requirements.txt, make sure:
+#### 3. Sample Attack Workflow
 
-1. The requirements.txt files are properly formatted (no comments or Python code)
-2. For Windows users:
-   ```powershell
-   # Install C2 server dependencies
-   cd AttackBots\c2_server
-   pip install flask==2.3.3 requests==2.31.0
+1. **Network Discovery**: Scan for vulnerable IoT devices
+2. **Credential Testing**: Attempt brute force attacks using common IoT passwords
+3. **Device Compromise**: Deploy bot agents to compromised devices
+4. **Attack Coordination**: Execute coordinated attacks (DDoS, data exfiltration)
+5. **Analysis**: Review attack logs and success metrics
 
-   # Install exploit framework dependencies
-   cd ..\exploit
-   pip install requests urllib3 scapy paramiko cryptography psutil tqdm setuptools wheel python-nmap flask werkzeug colorama tabulate netifaces ifaddr
-   ```
-3. For Linux users:
-   ```bash
-   # Install C2 server dependencies
-   cd AttackBots/c2_server
-   pip3 install flask==2.3.3 requests==2.31.0
+## 🔧 Configuration
 
-   # Install exploit framework dependencies
-   cd ../exploit
-   pip3 install requests urllib3 scapy paramiko cryptography psutil tqdm setuptools wheel python-nmap flask werkzeug colorama tabulate netifaces ifaddr
-   ```
+### MQTT Broker Configuration
 
-#### Troubleshooting C2 Server Web Interface
+Edit the MQTT broker settings in `Agent/mqttbroker.py`:
 
-If you encounter an "Error loading dashboard: dashboard.html" when accessing the C2 server web interface, you need to create the Flask templates directory and files:
+```python
+host = '10.10.10.10'          # MQTT broker host
+port = 1883                   # MQTT broker port
+username = 'your_username'    # MQTT username
+password = 'your_password'    # MQTT password
+topic = 'iot/devices/+'       # MQTT topic pattern
+```
 
-1. Create the templates directory:
-   ```powershell
-   # For Windows
-   mkdir AttackBots\c2_server\templates
-   
-   # For Linux
-   mkdir -p AttackBots/c2_server/templates
-   ```
+### Attack Framework Configuration
 
-2. Create the required HTML template files:
-   - dashboard.html
-   - bots.html
-   - credentials.html
-   - scans.html
-   - ddos.html
-   
-   These template files should be placed in the templates directory to enable the Flask web interface to function correctly. The repository includes these files in the correct location.
+The attack framework uses a SQLite database (`research_db.sqlite`) to store:
+- Discovered network targets
+- Successful credential combinations
+- Bot deployment status
+- Attack execution logs
 
-## Usage Guide
+## 📚 Documentation
 
-### 1. GNS3 Network Setup
+- **Quick Start Guide**: See `AttackThreat/QUICKSTART.md` for detailed setup instructions
+- **Attack Framework**: See `AttackThreat/README.md` for comprehensive documentation
+- **Module Documentation**: Each module in `AttackThreat/modules/` contains inline documentation
 
-1. Launch GNS3
-2. Create a new project
-3. Add the following devices:
-   - Cisco 7200 router for network routing
-   - Ubuntu Server for MQTT broker
-   - Multiple IoT device nodes (can be Docker containers)
-   - Kali Linux node for attack simulation
+## 🛡️ Security Considerations
 
-### 2. MQTT Communication Setup
+### Ethical Use Guidelines
 
-1. Configure the MQTT broker on the Ubuntu Server node:
-   ```bash
-   python mqttbroker.py --host 0.0.0.0 --port 1883
-   ```
+- **Educational Purpose Only**: This tool is designed for learning and research
+- **Authorized Testing**: Only use on systems you own or have explicit permission to test
+- **Isolated Environments**: Always run in isolated lab networks, never on production systems
+- **Legal Compliance**: Ensure compliance with local laws and regulations
+- **Responsible Disclosure**: Report discovered vulnerabilities through proper channels
 
-2. Set up publisher clients on IoT device nodes:
-   ```bash
-   python publish.py --broker <broker_ip> --topic sensors/temperature --interval 5
-   ```
+### Safety Measures
 
-### 3. Attack Simulation
+- Use virtual machines for testing
+- Implement network segmentation
+- Monitor resource usage during testing
+- Maintain proper logging for audit purposes
+- Implement cleanup procedures after testing
 
-1. Start the Command & Control server:
-   ```bash
-   cd AttackBots/c2_server
-   python c2_server.py
-   ```
+## 🤝 Contributing
 
-2. Launch the exploit framework:
-   ```bash
-   cd AttackBots/exploit
-   python launcher.py --target 192.168.1.0/24 --threads 10
-   ```
+Contributions are welcome for educational improvements and bug fixes. Please ensure all contributions maintain the educational focus and ethical guidelines of the project.
 
-3. Access the web interface at `http://<c2_server_ip>:5000` to monitor and control the attack simulation
+### Development Guidelines
 
-### 4. Analysis and Monitoring
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/improvement`)
+3. Commit your changes (`git commit -am 'Add educational feature'`)
+4. Push to the branch (`git push origin feature/improvement`)
+5. Create a Pull Request
 
-1. Use Wireshark to capture and analyze network traffic
-2. Monitor MQTT message flow to detect anomalies
-3. Track system logs on IoT devices for signs of compromise
+## 📄 License
 
-## Security Considerations
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-⚠️ **WARNING**: This system is designed for educational and research purposes only. Use it responsibly and only on systems you own or have explicit permission to test.
+## ⚠️ Legal Notice
 
-- Always operate this testbed in an isolated network environment
-- Never connect the testbed to production networks or the internet
-- Use strong, unique passwords for all components
-- Follow legal and ethical guidelines when conducting security research
+**IMPORTANT**: The authors and contributors are not responsible for any misuse of this software. Users are solely responsible for ensuring compliance with applicable laws and regulations. This software is provided "as is" without warranty of any kind.
 
-## Troubleshooting
+## 🆘 Support
 
-### Common Issues
+For questions related to educational use:
 
-1. **MQTT Connection Failures**:
-   - Verify IP addressing and network connectivity
-   - Check that the MQTT broker is running and accessible
-   - Ensure port 1883 is open on all relevant devices
+1. Check the documentation and quick start guides
+2. Review the troubleshooting sections
+3. Submit issues through the project repository
+4. Consult the inline code documentation
 
-2. **GNS3 Performance Issues**:
-   - Reduce the number of concurrent devices
-   - Allocate more resources to GNS3
-   - Use lightweight container images when possible
+## 🙏 Acknowledgments
 
-3. **Attack Simulation Errors**:
-   - Check dependencies installation
-   - Verify network connectivity between attack nodes and targets
-   - Review C2 server logs for error messages
+This project incorporates various cybersecurity research concepts and techniques for educational purposes. It is designed to help security researchers understand IoT vulnerabilities and develop effective defensive strategies.
 
-## Usage
+---
 
-For detailed instructions on how to use the IoT Digital Twin Security Testbed, please refer to the [USAGE.md](USAGE.md) file, which includes:
-
-- How to start the C2 server
-- How to register attack bots
-- How to launch DDoS attacks
-- How to use the demo environment
-- Security warnings and best practices
-
-## References
-
-- MQTT Broker Setup
-- GNS3 Documentation: [https://docs.gns3.com/](https://docs.gns3.com/)
-- IoT Security Best Practices
+**Remember**: Always use this tool responsibly and only in authorized environments. The goal is to improve IoT security through education and research, not to cause harm.
