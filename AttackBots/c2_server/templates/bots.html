@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C2 Server - Bots</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1e1e1e;
+            color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: #300;
+            color: #fff;
+            padding: 15px 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+        }
+        .section {
+            background-color: #2d2d2d;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #ff5050;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        th {
+            background-color: #222;
+            color: #ff5050;
+        }
+        tr:hover {
+            background-color: #383838;
+        }
+        .nav {
+            display: flex;
+            background-color: #2d2d2d;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .nav a {
+            color: #f0f0f0;
+            text-decoration: none;
+            padding: 15px 20px;
+            flex: 1;
+            text-align: center;
+            transition: background-color 0.3s;
+        }
+        .nav a:hover {
+            background-color: #444;
+        }
+        .nav a.active {
+            background-color: #ff5050;
+            color: #fff;
+        }
+        .refresh-btn {
+            background-color: #ff5050;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            float: right;
+            margin-bottom: 10px;
+        }
+        .refresh-btn:hover {
+            background-color: #e04040;
+        }
+        .device-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-online {
+            background-color: #4CAF50;
+        }
+        .status-offline {
+            background-color: #F44336;
+        }
+        .action-btn {
+            background-color: #444;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        .action-btn:hover {
+            background-color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Compromised Devices</h1>
+        </div>
+        
+        <div class="nav">
+            <a href="/">Dashboard</a>
+            <a href="/bots" class="active">Bots</a>
+            <a href="/credentials">Credentials</a>
+            <a href="/scans">Scans</a>
+            <a href="/ddos">DDoS</a>
+        </div>
+        
+        <button class="refresh-btn" onclick="window.location.reload();">Refresh Data</button>
+        
+        <div class="section">
+            <h2>Compromised Devices</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Device Type</th>
+                        <th>OS</th>
+                        <th>Last Seen</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for device in devices %}
+                    <tr>
+                        <td>{{ device.ip }}</td>
+                        <td>{{ device.device_type }}</td>
+                        <td>{{ device.os }}</td>
+                        <td>{{ device.last_seen }}</td>
+                        <td>
+                            {% if device.connected %}
+                            <span class="device-status status-online"></span> Online
+                            {% else %}
+                            <span class="device-status status-offline"></span> Offline
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="action-btn">Command</button>
+                            <button class="action-btn">Remove</button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" style="text-align: center;">No compromised devices</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

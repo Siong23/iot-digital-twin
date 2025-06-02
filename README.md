@@ -110,6 +110,28 @@ If you encounter pip installation errors with requirements.txt, make sure:
    pip3 install requests urllib3 scapy paramiko cryptography psutil tqdm setuptools wheel python-nmap flask werkzeug colorama tabulate netifaces ifaddr
    ```
 
+#### Troubleshooting C2 Server Web Interface
+
+If you encounter an "Error loading dashboard: dashboard.html" when accessing the C2 server web interface, you need to create the Flask templates directory and files:
+
+1. Create the templates directory:
+   ```powershell
+   # For Windows
+   mkdir AttackBots\c2_server\templates
+   
+   # For Linux
+   mkdir -p AttackBots/c2_server/templates
+   ```
+
+2. Create the required HTML template files:
+   - dashboard.html
+   - bots.html
+   - credentials.html
+   - scans.html
+   - ddos.html
+   
+   These template files should be placed in the templates directory to enable the Flask web interface to function correctly. The repository includes these files in the correct location.
+
 ## Usage Guide
 
 ### 1. GNS3 Network Setup

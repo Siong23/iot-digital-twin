@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C2 Server - Scans</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #1e1e1e;
+            color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background-color: #300;
+            color: #fff;
+            padding: 15px 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+        }
+        .section {
+            background-color: #2d2d2d;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #ff5050;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        th {
+            background-color: #222;
+            color: #ff5050;
+        }
+        tr:hover {
+            background-color: #383838;
+        }
+        .nav {
+            display: flex;
+            background-color: #2d2d2d;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .nav a {
+            color: #f0f0f0;
+            text-decoration: none;
+            padding: 15px 20px;
+            flex: 1;
+            text-align: center;
+            transition: background-color 0.3s;
+        }
+        .nav a:hover {
+            background-color: #444;
+        }
+        .nav a.active {
+            background-color: #ff5050;
+            color: #fff;
+        }
+        .refresh-btn {
+            background-color: #ff5050;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            float: right;
+            margin-bottom: 10px;
+        }
+        .refresh-btn:hover {
+            background-color: #e04040;
+        }
+        .vulnerability-high {
+            color: #F44336;
+            font-weight: bold;
+        }
+        .vulnerability-medium {
+            color: #FFC107;
+            font-weight: bold;
+        }
+        .vulnerability-low {
+            color: #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Network Scan Results</h1>
+        </div>
+        
+        <div class="nav">
+            <a href="/">Dashboard</a>
+            <a href="/bots">Bots</a>
+            <a href="/credentials">Credentials</a>
+            <a href="/scans" class="active">Scans</a>
+            <a href="/ddos">DDoS</a>
+        </div>
+        
+        <button class="refresh-btn" onclick="window.location.reload();">Refresh Data</button>
+        
+        <div class="section">
+            <h2>Recent Network Scans</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Target IP</th>
+                        <th>Scan Time</th>
+                        <th>Open Ports</th>
+                        <th>Services</th>
+                        <th>Vulnerability</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for scan in scans %}
+                    <tr>
+                        <td>{{ scan.target_ip }}</td>
+                        <td>{{ scan.scan_time }}</td>
+                        <td>{{ scan.open_ports }}</td>
+                        <td>{{ scan.services }}</td>
+                        <td class="{% if scan.vulnerability_level == 'high' %}vulnerability-high{% elif scan.vulnerability_level == 'medium' %}vulnerability-medium{% else %}vulnerability-low{% endif %}">
+                            {{ scan.vulnerability }}
+                        </td>
+                        <td>
+                            <button class="action-btn" onclick="launchExploit('{{ scan.target_ip }}')">Exploit</button>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" style="text-align: center;">No scan results available</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Launch New Scan</h2>
+            <form id="scan-form">
+                <div style="margin-bottom: 15px;">
+                    <label for="target" style="display: block; margin-bottom: 5px;">Target IP/Range:</label>
+                    <input type="text" id="target" name="target" placeholder="192.168.1.0/24" style="width: 100%; padding: 8px; background: #333; border: 1px solid #555; color: #fff; border-radius: 3px;">
+                </div>
+                
+                <div style="margin-bottom: 15px;">
+                    <label for="scan-type" style="display: block; margin-bottom: 5px;">Scan Type:</label>
+                    <select id="scan-type" name="scan-type" style="width: 100%; padding: 8px; background: #333; border: 1px solid #555; color: #fff; border-radius: 3px;">
+                        <option value="quick">Quick Scan</option>
+                        <option value="full">Full Port Scan</option>
+                        <option value="vuln">Vulnerability Scan</option>
+                    </select>
+                </div>
+                
+                <button type="submit" style="background-color: #ff5050; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer;">Launch Scan</button>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('scan-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const target = document.getElementById('target').value;
+            const scanType = document.getElementById('scan-type').value;
+            
+            // Here we would normally send this to the server
+            alert(`Launching ${scanType} scan against ${target}`);
+            
+            // In a real implementation, this would send to a backend endpoint
+        });
+        
+        function launchExploit(ip) {
+            // In a real implementation, this would launch an exploit against the target
+            alert(`Launching exploit against ${ip}`);
+        }
+    </script>
+</body>
+</html>

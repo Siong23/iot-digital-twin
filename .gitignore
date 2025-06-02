@@ -38,6 +38,7 @@ env/
 *.sqlite3
 *.db
 c2_database.db
+c2_server.db
 
 # GNS3 specific
 *.gns3project
