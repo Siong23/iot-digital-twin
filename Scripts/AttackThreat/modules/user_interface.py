@@ -31,7 +31,7 @@ class UserInterface:
         print("\n" + "="*80)
         print("╔══════════════════════════════════════════════════════════════════════════════╗")
         print("║                          IoT Security Research Tool                          ║")
-        print("║                     Educational Purpose Only - Lab Use                      ║")
+        print("║                     Educational Purpose Only - Lab Use                       ║")
         print("╚══════════════════════════════════════════════════════════════════════════════╝")
         print("="*80)
     
