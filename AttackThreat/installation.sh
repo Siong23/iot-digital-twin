@@ -53,20 +53,9 @@ sudo apt install -y \
 print_status "Installing network tools..."
 sudo apt install -y \
     nmap \
-    masscan \
-    hping3 \
     netcat-openbsd \
     telnet \
     openssh-client
-
-# Install packet manipulation libraries
-print_status "Installing packet manipulation tools..."
-sudo apt install -y \
-    libpcap-dev \
-    tcpdump \
-    wireshark-common \
-    tshark \
-    ngrep
 
 # Install cryptography dependencies
 print_status "Installing cryptography dependencies..."
@@ -80,15 +69,6 @@ sudo apt install -y \
 # Install MQTT tools
 print_status "Installing MQTT tools..."
 sudo apt install -y mosquitto-clients
-
-# Set up user permissions for network tools
-print_status "Setting up user permissions..."
-sudo usermod -a -G wireshark $USER
-
-# Set capabilities for Python to access raw sockets
-print_status "Setting network capabilities for Python..."
-PYTHON_PATH=$(which python3)
-sudo setcap cap_net_raw,cap_net_admin=eip $PYTHON_PATH
 
 # Create virtual environment
 print_status "Creating Python virtual environment..."
@@ -128,25 +108,11 @@ except ImportError as e:
     exit(1)
 "
 
-# Check if scapy can access raw sockets
-print_status "Testing network capabilities..."
-python3 -c "
-from scapy.all import *
-try:
-    # Test if we can create a raw socket
-    conf.L3socket()
-    print('✓ Scapy can access raw sockets')
-except Exception as e:
-    print(f'✗ Scapy raw socket test failed: {e}')
-    print('You may need to logout and login again for group changes to take effect')
-"
-
 print_status "Installation completed successfully!"
 print_warning "IMPORTANT NOTES:"
-echo "1. You may need to logout and login again for group permissions to take effect"
-echo "2. To activate the virtual environment, run: source venv/bin/activate"
-echo "3. This framework is for educational and authorized testing purposes only"
-echo "4. Always ensure you have proper authorization before using these tools"
+echo "1. To activate the virtual environment, run: source venv/bin/activate"
+echo "2. This framework is for educational and authorized testing purposes only"
+echo "3. Always ensure you have proper authorization before using these tools"
 
 echo ""
 echo "=========================================="
@@ -155,5 +121,4 @@ echo "✓ System packages installed"
 echo "✓ Network tools configured"
 echo "✓ Python virtual environment created"
 echo "✓ Python packages installed"
-echo "✓ User permissions configured"
 echo "=========================================="
