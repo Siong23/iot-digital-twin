@@ -1,13 +1,2 @@
-#!/usr/bin/env python3
-"""
-Install required packages for C2 Server
-"""
-
-# Core web framework
 flask==2.3.3
-
-# Database (SQLite is built-in to Python)
-# No additional packages needed for SQLite
-
-# Additional utilities
 requests==2.31.0

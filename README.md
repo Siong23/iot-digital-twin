@@ -84,6 +84,32 @@ cd ../exploit
 pip install -r requirements.txt
 ```
 
+#### Troubleshooting Installation
+
+If you encounter pip installation errors with requirements.txt, make sure:
+
+1. The requirements.txt files are properly formatted (no comments or Python code)
+2. For Windows users:
+   ```powershell
+   # Install C2 server dependencies
+   cd AttackBots\c2_server
+   pip install flask==2.3.3 requests==2.31.0
+
+   # Install exploit framework dependencies
+   cd ..\exploit
+   pip install requests urllib3 scapy paramiko cryptography psutil tqdm setuptools wheel python-nmap flask werkzeug colorama tabulate netifaces ifaddr
+   ```
+3. For Linux users:
+   ```bash
+   # Install C2 server dependencies
+   cd AttackBots/c2_server
+   pip3 install flask==2.3.3 requests==2.31.0
+
+   # Install exploit framework dependencies
+   cd ../exploit
+   pip3 install requests urllib3 scapy paramiko cryptography psutil tqdm setuptools wheel python-nmap flask werkzeug colorama tabulate netifaces ifaddr
+   ```
+
 ## Usage Guide
 
 ### 1. GNS3 Network Setup
