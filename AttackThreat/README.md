@@ -119,13 +119,41 @@ python3 exploit.py --session 192.168.1.100
 
 Run without arguments for menu-driven interface:
 ```bash
-python3 exploit.py
+python3 exploit_interactive.py
 ```
 
-Then select:
-1. Scan subnet
-2. List vulnerable devices
-3. Open session
+**Available Operations:**
+1. **Scan subnet** - Port scanning only (discovery)
+2. **Brute-force attack** - Scan + credential testing with speed options
+3. **List vulnerable devices** - Show discovered compromised devices
+4. **Print credentials only** - Clean credentials output
+5. **Open interactive session** - Individual device access with advanced features
+6. **🆕 Distributed DDoS attack** - Coordinate attacks from all compromised devices
+7. **🆕 Coordinated reconnaissance** - Simultaneous recon across all devices
+
+### Advanced Attack Features
+
+#### Individual Session Capabilities (Option 5)
+When accessing a single compromised device:
+- **Interactive shell access** with `exit_shell` command
+- **Automated sudo hping3 DDoS attacks** with password handling
+- **Reconnaissance automation** (11 commands)
+- **Exploitation automation** (10 commands)
+- **Help system** with numbered command mapping
+
+#### Distributed Attack Capabilities (Options 6-7)
+**Distributed DDoS Attack (Option 6):**
+- Simultaneously connects to **all compromised devices**
+- Launches coordinated `sudo hping3 --flood` attacks against target IP
+- Automatic password handling across all devices
+- Real-time attack monitoring and control
+- **Ctrl+C** stops all attacks simultaneously
+
+**Coordinated Reconnaissance (Option 7):**
+- Parallel reconnaissance across all compromised devices
+- Quick system information gathering from entire botnet
+- Network topology mapping from multiple vantage points
+- Comprehensive environmental assessment
 
 ## 📁 File Structure
 
