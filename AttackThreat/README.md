@@ -33,7 +33,7 @@ This framework is designed to work with GNS3 lab environments containing:
 1. **Clone or download the framework files:**
    ```bash
    # Download the main files:
-   # - iot_lab_tester.py
+   # - exploit.py
    # - credentials.txt
    # - requirements.txt
    ```
@@ -71,31 +71,31 @@ This framework is designed to work with GNS3 lab environments containing:
 #### 1. Scan a Subnet
 ```bash
 # Scan for devices with open Telnet ports
-python iot_lab_tester.py --scan 192.168.1.0/24
-python iot_lab_tester.py --scan 10.10.10.0/24
-python iot_lab_tester.py --scan 11.10.10.0/24
+python exploit.py --scan 192.168.1.0/24
+python exploit.py --scan 10.10.10.0/24
+python exploit.py --scan 11.10.10.0/24
 ```
 
 #### 2. Use Custom Credentials File
 ```bash
-python iot_lab_tester.py --scan 192.168.1.0/24 --creds my_credentials.txt
+python exploit.py --scan 192.168.1.0/24 --creds credentials.txt
 ```
 
 #### 3. List Discovered Vulnerable Devices
 ```bash
-python iot_lab_tester.py --list
+python exploit.py --list
 ```
 
 #### 4. Open Interactive Session
 ```bash
-python iot_lab_tester.py --session 192.168.1.100
+python exploit.py --session 192.168.1.100
 ```
 
 ### Interactive Mode
 
 Run without arguments for menu-driven interface:
 ```bash
-python iot_lab_tester.py
+python exploit.py
 ```
 
 Then select:
@@ -107,7 +107,7 @@ Then select:
 
 ```
 iot-lab-framework/
-├── iot_lab_tester.py      # Main framework script
+├── exploit.py      # Main framework script
 ├── credentials.txt        # Default credential pairs for testing
 ├── requirements.txt       # Optional Python dependencies
 ├── README.md             # This file
