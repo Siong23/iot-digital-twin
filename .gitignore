@@ -235,6 +235,7 @@ mqtt_config.json
 *.bak
 *.backup
 *.orig
+*_backup.py
 
 # Temporary directories
 tmp/
