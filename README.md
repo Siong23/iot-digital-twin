@@ -58,7 +58,7 @@ The testbed consists of several key components:
    pip install -r requirements.txt
    ```
 
-3. **Set up GNS3 environment** with the required appliances (see [Dependencies](##-📋-Dependencies))
+3. **Set up GNS3 environment** with the required appliances (see [Dependencies](#-dependencies))
 
 ### Basic Usage
 
