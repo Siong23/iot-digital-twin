@@ -5,7 +5,8 @@ from datetime import datetime
 
 # MQTT Broker Configuration (localhost with authentication)
 BROKER = {
-    'host': 'localhost',
+    'host': '192.168.20.2',
+    # 'host': 'localhost',
     'port': 1883,
     'username': 'admin',
     'password': 'abc123',
