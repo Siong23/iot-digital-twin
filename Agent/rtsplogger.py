@@ -31,11 +31,13 @@ process = subprocess.Popen(
 )
 
 frame_count = 0
-codec = ""
-resolution = ""
-fps = ""
-bitrate = ""
+codec = "unknown"
+resolution = "unknown"
+fps = "0"
+bitrate = "0"
 last_log_time = time.time()
+metadata_found = False
+start_time = time.time()
 
 # Regex patterns
 stream_info_pattern = re.compile(r"Stream #\\d+:\\d+: Video: (\\w+).*?, (\\d+x\\d+).*?, (\\d+) fps")
@@ -52,10 +54,18 @@ try:
         print(line)
 
         # Extract stream info once
-        if not codec and "Stream #" in line:
+        if not metadata_found and "Stream #" in line:
             match = stream_info_pattern.search(line)
             if match:
                 codec, resolution, fps = match.groups()
+                metadata_found = True
+
+        # Fallback: apply default values if metadata not found after 5s
+        if not metadata_found and (now - start_time > 5):
+            codec = "h264"
+            resolution = "704x576"
+            fps = "15"
+            metadata_found = True
 
         # Extract real-time values
         match = frame_pattern.search(line)
@@ -76,6 +86,7 @@ try:
             with open(csv_file, "a", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([timestamp, bitrate, fps, resolution, codec, frame_count])
+            print(f"[LOG] {timestamp} | bitrate={bitrate} kbps | fps={fps} | frame={frame_count} | res={resolution} | codec={codec}")
             last_log_time = now
 
 except KeyboardInterrupt:
