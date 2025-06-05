@@ -1,5 +1,6 @@
 import paho.mqtt.client as mqtt
 import csv
+import json
 from datetime import datetime
 
 # MQTT Broker Configuration (localhost with authentication)
@@ -29,18 +30,23 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode()
     print(f"Received: {payload}")
     try:
-        temperature, humidity = payload.split(',')
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        data = json.loads(payload)
+        if "temperature" in data and "humidity" in data:
+            temperature = data["temperature"]
+            humidity = data["humidity"]
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with open(csv_file, "a", newline="") as f:
-            writer = csv.writer(f)
-            if f.tell() == 0:
-                writer.writerow(["timestamp", "temperature", "humidity"])
-            writer.writerow([timestamp, temperature.strip(), humidity.strip()])
-            print(f"Logged data: {timestamp}, {temperature}, {humidity}")
+            with open(csv_file, "a", newline="") as f:
+                writer = csv.writer(f)
+                if f.tell() == 0:
+                    writer.writerow(["timestamp", "temperature", "humidity"])
+                writer.writerow([timestamp, temperature, humidity])
+                print(f"Logged data: {timestamp}, {temperature}, {humidity}")
+        else:
+            print("Required keys not found in JSON payload")
 
-    except ValueError:
-        print("Invalid payload format. Expected: temperature,humidity")
+    except json.JSONDecodeError:
+        print("Payload is not valid JSON, skipping")
 
 # Set up MQTT client
 client = mqtt.Client()
