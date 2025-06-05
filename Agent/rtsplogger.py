@@ -15,9 +15,10 @@ with open(csv_file, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["ts", "bitrate_kbps", "fps", "resolution", "codec", "frame_count"])
 
-# FFmpeg command
+# FFmpeg command with verbose logging and 1s stats interval
 ffmpeg_cmd = [
-    "ffmpeg", "-loglevel", "info", "-rtsp_transport", "tcp", "-i", RTSP_URL,
+    "ffmpeg", "-stats_period", "1", "-loglevel", "verbose",
+    "-rtsp_transport", "tcp", "-i", RTSP_URL,
     "-f", "null", "-"
 ]
 
@@ -38,11 +39,17 @@ last_log_time = time.time()
 
 # Regex patterns
 stream_info_pattern = re.compile(r"Stream #\\d+:\\d+: Video: (\\w+).*?, (\\d+x\\d+).*?, (\\d+) fps")
-frame_line_pattern = re.compile(r"frame=\\s*(\\d+)\\s+fps=\\s*(\\d+).*?bitrate=\\s*(\\d+(?:\\.\\d+)?)kbits/s")
+frame_pattern = re.compile(r"frame=\\s*(\\d+)")
+fps_pattern = re.compile(r"fps=\\s*(\\d+)")
+bitrate_pattern = re.compile(r"bitrate=\\s*(\\d+(?:\\.\\d+)?)kbits/s")
 
 try:
     for line in process.stdout:
         now = time.time()
+        line = line.strip()
+
+        # Print for debug
+        print(line)
 
         # Extract stream info once
         if not codec and "Stream #" in line:
@@ -50,14 +57,20 @@ try:
             if match:
                 codec, resolution, fps = match.groups()
 
-        # Parse live frame line
-        match = frame_line_pattern.search(line)
+        # Extract real-time values
+        match = frame_pattern.search(line)
         if match:
             frame_count = int(match.group(1))
-            fps = match.group(2)
-            bitrate = match.group(3)
 
-        # Log once per second
+        match = fps_pattern.search(line)
+        if match:
+            fps = match.group(1)
+
+        match = bitrate_pattern.search(line)
+        if match:
+            bitrate = match.group(1)
+
+        # Log every second
         if now - last_log_time >= 1:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(csv_file, "a", newline="") as f:
