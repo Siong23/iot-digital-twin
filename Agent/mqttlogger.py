@@ -16,7 +16,7 @@ BROKER = {
 # CSV File
 csv_file = "telemetry_log.csv"
 
-# Callback when connected to MQTT broker
+# Callback when connected to the MQTT broker
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT broker.")
@@ -49,5 +49,8 @@ client.on_connect = on_connect
 client.on_message = on_message
 
 # Connect and run
-client.connect(BROKER['host'], BROKER['port'])
-client.loop_forever()
+try:
+    client.connect(BROKER['host'], BROKER['port'])
+    client.loop_forever()
+except Exception as e:
+    print(f"MQTT connection error: {e}")
