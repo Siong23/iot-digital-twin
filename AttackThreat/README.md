@@ -134,12 +134,14 @@ python exploit_interactive.py --session 192.168.1.100
 
 ```
 AttackThreat/
-├── exploit_interactive.py    # Enhanced interactive version
-├── exploit.py                # Basic framework script
-├── credentials.txt           # Default credential pairs for testing
-├── requirements.txt          # Python dependencies
-├── README.md                 # This documentation
-└── iot_lab_results.db        # SQLite database (created automatically)
+├── exploit_interactive.py        # Enhanced interactive version
+├── exploit_interactive_backup.py # Backup of interactive version
+├── exploit.py                    # Basic framework script
+├── credentials.txt               # Default credential pairs for testing
+├── requirements.txt              # Python dependencies
+├── README.md                     # This documentation
+├── cameradarexploit.sh           # Camera exploitation helper script
+└── iot_lab_results.db            # SQLite database (created automatically)
 ```
 
 ## 🔧 Configuration
@@ -235,21 +237,36 @@ The framework includes built-in rate limiting to prevent overwhelming devices an
    - Verify target devices are running and accessible
    - Check network connectivity in your lab
    - Ensure Telnet service is enabled on target devices
+   - Check Windows Firewall settings if running in a Windows environment
 
 2. **"No vulnerable devices found":**
    - Verify credentials file format
    - Check if devices use non-standard login prompts
    - Increase timeout values for slow devices
    - Ensure proper network connectivity
+   - Try different speed modes
 
 3. **Database errors:**
    - Check file permissions
    - Ensure write permissions to the directory
    - Verify available disk space
+   - If using Windows, run as Administrator if needed
 
 4. **Input/Output errors:**
    - In the interactive mode, if you encounter display issues, try resizing your terminal
    - For long-running operations, use the appropriate speed mode for your environment
+   - If using Windows PowerShell, ensure console encoding is set correctly
+
+5. **Python-related errors:**
+   - Ensure Python 3.8+ is installed: `python --version`
+   - Install required packages: `pip install -r requirements.txt`
+   - If using a virtual environment, ensure it's activated
+
+### Rollback Option
+
+If you encounter issues with the main interactive script:
+- Use the backup version: `python exploit_interactive_backup.py`
+- Report any bugs or issues you find
 
 ### Performance Tips
 
