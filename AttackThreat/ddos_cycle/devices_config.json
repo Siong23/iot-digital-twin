@@ -1,0 +1,12 @@
+[
+  {
+    "ip": "11.10.10.10",
+    "username": "ipcamadmin",
+    "password": "admin"
+  },
+  {
+    "ip": "11.10.10.11",
+    "username": "temphumidadmin",
+    "password": "admin"
+  }
+]
