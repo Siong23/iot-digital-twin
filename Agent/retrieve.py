@@ -4,16 +4,16 @@ import paho.mqtt.client as mqtt
 
 # Define Agent Broker (A)
 BROKER_A = {
-    'host': 'localhost',
+    'host': '192.168.20.2',
     'port': 1883,
     'username': 'admin',
-    'password': 'admin123',
-    'topic_subscribe': 'sensors/digital/data',
+    'password': 'abc123',
+    'topic_subscribe': 'sensors/data',
 }
 
 # Define Agent Broker (B)
 BROKER_B = {
-    'host': '10.10.10.10',
+    'host': 'localhost',
     'port': 1883,
     'username': 'admin',
     'password': 'admin123',
