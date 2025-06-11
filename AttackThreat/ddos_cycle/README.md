@@ -19,8 +19,8 @@ The DDoS Cycler script has been updated with a sophisticated timing pattern that
 ### Total Duration: 42 minutes
 - 6 attacks × 4 minutes = 24 minutes
 - 4 regular pauses × 2 minutes = 8 minutes  
-- 2 long pauses × 5 minutes = 10 minutes
-- **Total: 42 minutes**
+- 1 long pauses × 5 minutes = 5 minutes
+- **Total: 37 minutes**
 
 ## Command Line Usage
 
