@@ -7,7 +7,7 @@ This dataset contains network traffic data captured from a digital twin testbed 
 ## Dataset Information
 
 - **Name**: IoT Network Digital Twin – Normal and Attack Traffic
-- **Kaggle Link**: [https://www.kaggle.com/datasets/iffathanafiah/iotdigitaltwin/data](https://www.kaggle.com/datasets/iffathanafiah/iotdigitaltwin/data)
+- **Kaggle Link**: [https://www.kaggle.com/datasets/iffathanafiah/iotdigitaltwin](https://www.kaggle.com/datasets/iffathanafiah/iotdigitaltwin)
 - **Total Duration**: Approximately 6 hours
 - **Normal Traffic**: 3 hours
 - **Attack Traffic**: 3+ hours
