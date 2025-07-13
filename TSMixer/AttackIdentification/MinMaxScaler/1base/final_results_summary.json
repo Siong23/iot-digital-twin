@@ -1,0 +1,23 @@
+{
+    "Model": "Enhanced TSMixer with Attention",
+    "Best Hyperparameters": {
+        "batch_size": 56,
+        "hidden_dim": 640,
+        "num_blocks": 26,
+        "dropout_rate": 0.19843966652221853,
+        "learning_rate": 0.00029380279387035364,
+        "weight_decay": 4.207053950287931e-07,
+        "focal_alpha": 0.25,
+        "focal_gamma": 3.25,
+        "use_channel_attention": false,
+        "use_temporal_attention": false
+    },
+    "Test Accuracy": 0.9915622602914855,
+    "Test Precision": 0.9915314874532412,
+    "Test Recall": 0.9915622602914855,
+    "Test F1 Score": 0.991538646597584,
+    "Per-Class Accuracy": {
+        "dos": 0.9962456306908902,
+        "normal": 0.9657469077069457
+    }
+}
