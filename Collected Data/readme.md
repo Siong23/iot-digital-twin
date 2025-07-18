@@ -6,7 +6,7 @@ This dataset contains network traffic data captured from a digital twin testbed 
 
 ## Dataset Information
 
-- **Name**: IoT Network Digital Twin – Normal and Attack Traffic
+- **Name**: IoTNDT25: A Digital Twin-based IoT Network Dataset
 - **Kaggle Link**: [https://www.kaggle.com/datasets/iffathanafiah/iotdigitaltwin](https://www.kaggle.com/datasets/iffathanafiah/iotdigitaltwin)
 - **Total Duration**: Approximately 6 hours
 - **Normal Traffic**: 3 hours
