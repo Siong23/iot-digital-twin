@@ -126,7 +126,8 @@ This dataset is designed for:
 ## Dataset Structure
 
 The dataset includes:
-- Extracted features (CSV format)
+- Raw Data (PCAP format)
+- Extracted features (Logs from Zeek and CSV format)
 - Protocol-specific logs
 - Timestamp information for temporal analysis
 - Attack labels and classifications
