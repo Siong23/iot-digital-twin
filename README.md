@@ -26,12 +26,8 @@ The testbed consists of several key components:
 
 ```
 ├── Agent/                    # MQTT broker and IoT simulation tools
-│   ├── mqttbroker.py        # MQTT broker management
-│   ├── mqttlogger.py        # MQTT message logging
 │   ├── publish.py           # MQTT message publishing utilities
-│   ├── retrieve.py          # Data retrieval utilities
-│   ├── MQTTCaptureData/     # MQTT data capture modules
-│   └── RTSPCaptureData/     # RTSP stream capture modules
+│   └── retrieve.py          # Data retrieval utilities
 ├── AttackThreat/            # Security testing framework
 │   ├── exploit.py           # Automated vulnerability scanning
 │   ├── exploit_interactive.py # Interactive security testing
@@ -44,6 +40,10 @@ The testbed consists of several key components:
 │   ├── AttackIdentification/ # Binary attack detection
 │   └── IoTDigitalTwin/      # Real-world IoT data analysis
 ├── Collected Data/          # Dataset storage and management
+├── IoTDevice                # IoT Device Scenarios
+│   ├── MQTTScenarios        # MQTT broker and data management
+│   ├── MQTTCaptureData/     # MQTT data capture modules
+│   └── RTSPCaptureData/     # RTSP stream capture modules
 └── README.md               # This documentation
 ```
 
@@ -89,7 +89,7 @@ The testbed consists of several key components:
 
 1. **Start the MQTT broker**:
    ```bash
-   cd Agent
+   cd IoTDevice/MQTTScenarios
    python3 mqttbroker.py
    ```
 
