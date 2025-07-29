@@ -28,10 +28,11 @@ def start_mosquitto_sub(host, username, password, topic):
     
 if __name__ == "__main__":
     # MQTT Broker details
-    host = '10.10.10.10'
+    host = 'localhost'
     username = 'admin'
     password = 'admin123'
-    topic = 'sensors/digital/data'
+    topic = 'sensors/data'
+    # topic = 'sensors/digital/data'
     
     print(f"Subscribing to MQTT broker {host} on topic '{topic}'... Press Ctrl+C to stop.")
     
