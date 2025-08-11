@@ -14,7 +14,7 @@ BROKER_PHYS = {
 
 # Digital Sensors Broker (on digital network via ens5)
 BROKER_DIGI = {
-    'host': '11.10.10.11',  
+    'host': '11.10.10.10',  
     'port': 1883,
     'username': 'admin',
     'password': 'admin123',
@@ -53,18 +53,18 @@ def on_connect_digi(client, userdata, flags, rc):
         print("Failed to connect to Digital Broker", rc)
 
 # -------- SETUP --------
-phys_client = mqtt.Client()
+phys_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
 phys_client.username_pw_set(BROKER_PHYS['username'], BROKER_PHYS['password'])
 phys_client.on_connect = on_connect_phys
 phys_client.on_message = on_message_phys
 
-digi_client = mqtt.Client()
+digi_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
 digi_client.username_pw_set(BROKER_DIGI['username'], BROKER_DIGI['password'])
 digi_client.on_connect = on_connect_digi
 
 # Connect
-digi_client.connect(BROKER_DIGI['host'], BROKER_DIGI['port'])
-phys_client.connect(BROKER_PHYS['host'], BROKER_PHYS['port'])
+digi_client.connect(BROKER_DIGI['host'], BROKER_DIGI['port'], bind_address="192.168.10.253")
+phys_client.connect(BROKER_PHYS['host'], BROKER_PHYS['port'], bind_address="192.168.10.254")
 
 # Start both loops
 digi_client.loop_start()
