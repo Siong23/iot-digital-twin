@@ -14,7 +14,7 @@ BROKER_PHYS = {
 
 # Digital Sensors Broker (on digital network via ens5)
 BROKER_DIGI = {
-    'host': '11.10.10.10',  
+    'host': '192.168.254.10',  
     'port': 1883,
     'username': 'admin',
     'password': 'admin123',
