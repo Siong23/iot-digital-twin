@@ -2,12 +2,21 @@
 
 # relayrtsp.sh - Compatible RTSP relay (Debian-safe)
 
-ffmpeg -re -stream_loop -1 \
- -rtsp_transport tcp \
- -stimeout 5000000 \
- -i rtsp://admin:admin@localhost:8554/proxied \
- -fflags nobuffer -flags low_delay \
- -c copy -f rtsp rtsp://10.10.10.10:8554/ip_camera \
- -loglevel error > /dev/null 2>&1 &
+SOURCE_URL="rtsp://admin:admin@localhost:8554/proxied"
+DEST_URL="rtsp://192.168.20.2:8554/ip_camera"
+RETRY_DELAY=5
 
-echo $! > ffmpeg_pid.txt
+while true; do
+        echo "[*] Starting stream relay at $(date)"
+
+        #Loop and forward stream from Digital IP Camera To Digital Iot Broker
+        ffmpeg -re -stream_loop -1 \
+         -rtsp_transport tcp \
+         -stimeout 5000000 \
+         -i "$SOURCE_URL" \
+         -fflags nobuffer -flags low_delay \
+         -c copy -f rtsp "$DEST_URL" \
+
+        echo "[!] FFmpeg exited. Retrying in $RETRY_DELAY seconds..."
+        sleep $RETRY_DELAY
+done
