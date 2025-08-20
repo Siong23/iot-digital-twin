@@ -13,7 +13,7 @@ BROKER_A = {
 
 # Define Agent Broker (B)
 BROKER_B = {
-    'host': '10.10.10.10',
+    'host': '192.168.20.2',
     'port': 1883,
     'username': 'admin',
     'password': 'admin123',
