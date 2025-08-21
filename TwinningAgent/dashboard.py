@@ -32,12 +32,13 @@ def on_message(client, userdata, msg):
     except Exception as e:
         print("Error parsing message:", e)
 
-# -------------------- Dashboard --------------------
+# -------------------- Custom Time Axis --------------------
 class TimeAxisItem(pg.AxisItem):
     """Custom X-axis to show clock time instead of seconds."""
     def tickStrings(self, values, scale, spacing):
         return [datetime.fromtimestamp(v).strftime("%H:%M:%S") for v in values]
 
+# -------------------- Dashboard --------------------
 class Dashboard(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -85,6 +86,25 @@ class Dashboard(QtWidgets.QWidget):
         # Enable anti-aliasing for smoother curves
         pg.setConfigOptions(antialias=True)
 
+        # ---------------- Hover Crosshair + Label ----------------
+        self.vLine_temp = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+        self.hLine_temp = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+        self.temp_plot.addItem(self.vLine_temp, ignoreBounds=True)
+        self.temp_plot.addItem(self.hLine_temp, ignoreBounds=True)
+        self.label_temp = pg.TextItem(anchor=(0,1))
+        self.temp_plot.addItem(self.label_temp)
+
+        self.vLine_hum = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('b', style=QtCore.Qt.DashLine))
+        self.hLine_hum = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('b', style=QtCore.Qt.DashLine))
+        self.hum_plot.addItem(self.vLine_hum, ignoreBounds=True)
+        self.hum_plot.addItem(self.hLine_hum, ignoreBounds=True)
+        self.label_hum = pg.TextItem(anchor=(0,1))
+        self.hum_plot.addItem(self.label_hum)
+
+        # Connect mouse move signals
+        self.temp_plot.scene().sigMouseMoved.connect(self.on_mouse_moved_temp)
+        self.hum_plot.scene().sigMouseMoved.connect(self.on_mouse_moved_hum)
+
     def update_dashboard(self):
         if not time_stamps:
             return
@@ -111,6 +131,44 @@ class Dashboard(QtWidgets.QWidget):
         self.status_label.setText(
             f"Router: UP | Broker: UP | Sensor: UP\nCPU: {cpu}%   RAM: {ram}%"
         )
+
+    # ---------------- Hover Handlers ----------------
+    def on_mouse_moved_temp(self, pos):
+        if not time_stamps:
+            return
+        vb = self.temp_plot.vb
+        mouse_point = vb.mapSceneToView(pos)
+        x = mouse_point.x()
+        if len(time_stamps) > 0:
+            # Find closest index
+            times_epoch = [t.timestamp() for t in time_stamps]
+            idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
+            if 0 <= idx < len(times_epoch):
+                self.vLine_temp.setPos(times_epoch[idx])
+                self.hLine_temp.setPos(temperature_values[idx])
+                self.label_temp.setHtml(
+                    f"<span style='color:red'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>"
+                    f"Temp: {temperature_values[idx]:.2f}°C</span>"
+                )
+                self.label_temp.setPos(times_epoch[idx], temperature_values[idx])
+
+    def on_mouse_moved_hum(self, pos):
+        if not time_stamps:
+            return
+        vb = self.hum_plot.vb
+        mouse_point = vb.mapSceneToView(pos)
+        x = mouse_point.x()
+        if len(time_stamps) > 0:
+            times_epoch = [t.timestamp() for t in time_stamps]
+            idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
+            if 0 <= idx < len(times_epoch):
+                self.vLine_hum.setPos(times_epoch[idx])
+                self.hLine_hum.setPos(humidity_values[idx])
+                self.label_hum.setHtml(
+                    f"<span style='color:blue'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>"
+                    f"Humidity: {humidity_values[idx]:.2f}%</span>"
+                )
+                self.label_hum.setPos(times_epoch[idx], humidity_values[idx])
 
 # -------------------- Main --------------------
 def main():
