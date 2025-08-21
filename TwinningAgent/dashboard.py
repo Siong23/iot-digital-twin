@@ -5,7 +5,7 @@ import time
 import psutil
 import paho.mqtt.client as mqtt
 from datetime import datetime
-from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 
 # -------------------- Data Buffers --------------------
@@ -49,13 +49,13 @@ class Dashboard(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Digital Twin IoT Dashboard")
-        self.resize(1100, 650)
+        self.resize(1100, 700)
 
-        layout = QtWidgets.QVBoxLayout(self)
+        main_layout = QtWidgets.QVBoxLayout(self)
 
-        # Graph area
+        # Graph area (use a container layout so we can add labels under each plot)
         self.graph_widget = pg.GraphicsLayoutWidget()
-        layout.addWidget(self.graph_widget)
+        main_layout.addWidget(self.graph_widget)
 
         # ---------------- Temperature Plot ----------------
         self.temp_plot = self.graph_widget.addPlot(
@@ -72,13 +72,20 @@ class Dashboard(QtWidgets.QWidget):
         self.vLine_temp = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
         self.hLine_temp = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
         self.label_temp = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
-        # start hidden
         self.vLine_temp.hide()
         self.hLine_temp.hide()
         self.label_temp.hide()
         self.temp_plot.addItem(self.vLine_temp, ignoreBounds=True)
         self.temp_plot.addItem(self.hLine_temp, ignoreBounds=True)
         self.temp_plot.addItem(self.label_temp)
+
+        # Label that always shows newest datapoint/time for temperature
+        self.temp_latest_label = QtWidgets.QLabel("Temp latest: --")
+        temp_label_widget = QtWidgets.QWidget()
+        temp_label_layout = QtWidgets.QHBoxLayout(temp_label_widget)
+        temp_label_layout.setContentsMargins(0, 0, 0, 0)
+        temp_label_layout.addWidget(self.temp_latest_label)
+        main_layout.addWidget(temp_label_widget)
 
         # ---------------- Humidity Plot ----------------
         self.graph_widget.nextRow()
@@ -103,9 +110,17 @@ class Dashboard(QtWidgets.QWidget):
         self.hum_plot.addItem(self.hLine_hum, ignoreBounds=True)
         self.hum_plot.addItem(self.label_hum)
 
+        # Label that always shows newest datapoint/time for humidity
+        self.hum_latest_label = QtWidgets.QLabel("Humidity latest: --")
+        hum_label_widget = QtWidgets.QWidget()
+        hum_label_layout = QtWidgets.QHBoxLayout(hum_label_widget)
+        hum_label_layout.setContentsMargins(0, 0, 0, 0)
+        hum_label_layout.addWidget(self.hum_latest_label)
+        main_layout.addWidget(hum_label_widget)
+
         # Status + usage label
         self.status_label = QtWidgets.QLabel("Initializing...")
-        layout.addWidget(self.status_label)
+        main_layout.addWidget(self.status_label)
 
         # Timer for updates
         self.timer = QtCore.QTimer()
@@ -123,15 +138,12 @@ class Dashboard(QtWidgets.QWidget):
         self.last_mouse_time_temp = 0.0
         self.last_mouse_time_hum = 0.0
 
-        # Ensure view-resize hooks (so we can clamp labels)
-        def update_temp_view():
-            pass
-        self.temp_plot.vb.sigResized.connect(update_temp_view)
-        self.hum_plot.vb.sigResized.connect(update_temp_view)
-
     # ---------------- UI Update ----------------
     def update_dashboard(self):
         if not time_stamps:
+            # update labels to show empty
+            self.temp_latest_label.setText("Temp latest: --")
+            self.hum_latest_label.setText("Humidity latest: --")
             return
 
         # Convert timestamps to epoch seconds
@@ -141,15 +153,21 @@ class Dashboard(QtWidgets.QWidget):
         self.temp_curve.setData(times_epoch, temperature_values)
         self.hum_curve.setData(times_epoch, humidity_values)
 
+        # Update newest-data labels (only newest)
+        newest_time = time_stamps[-1].strftime("%H:%M:%S")
+        newest_temp = temperature_values[-1]
+        newest_hum = humidity_values[-1]
+        self.temp_latest_label.setText(f"Latest Temp: {newest_temp:.2f} °C    at {newest_time}")
+        self.hum_latest_label.setText(f"Latest Humidity: {newest_hum:.2f}%    at {newest_time}")
+
         # Auto-scroll X range (last 5 min) if not hovering recently
         now_ts = time.time()
-        # if neither hovered recently, we auto-follow newest
         if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS and (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
             if times_epoch:
                 self.temp_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
                 self.hum_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
 
-        # Auto-scale Y when not hovering (still okay to auto-range)
+        # Auto-scale Y when not hovering
         self.temp_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.hum_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
@@ -167,12 +185,12 @@ class Dashboard(QtWidgets.QWidget):
         cpu = psutil.cpu_percent(interval=0.1)
         ram = psutil.virtual_memory().percent
         self.status_label.setText(
-            f"Router: UP | Broker: UP | Sensor: UP\nCPU: {cpu}%   RAM: {ram}%"
+            f"Router: UP | Broker: UP | Sensor: UP    CPU: {cpu}%   RAM: {ram}%"
         )
 
     # ---------------- Hover Handlers ----------------
     def on_mouse_moved_temp(self, pos):
-        """Show crosshair and tooltip, clamp tooltip inside view."""
+        """Show crosshair and tooltip for temp, and clamp tooltip inside view."""
         if not time_stamps:
             return
         vb = self.temp_plot.vb
@@ -198,7 +216,6 @@ class Dashboard(QtWidgets.QWidget):
             # Clamp label position inside view rect
             x_min, x_max = vb.viewRange()[0]
             y_min, y_max = vb.viewRange()[1]
-            # margins (10% of range)
             x_margin = max(1.0, (x_max - x_min) * 0.05)
             y_margin = max(0.1, (y_max - y_min) * 0.05)
             label_x = min(max(times_epoch[idx], x_min + x_margin), x_max - x_margin)
