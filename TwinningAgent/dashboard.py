@@ -1,25 +1,35 @@
 import sys
+import json
 import psutil
 import paho.mqtt.client as mqtt
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel
 from PyQt5.QtCore import QTimer
 import pyqtgraph as pg
 
-sensor_values = []
+# Buffers for sensor values
+temperature_values = []
+humidity_values = []
 
 # MQTT setup
 def on_message(client, userdata, msg):
     try:
-        value = float(msg.payload.decode())
-        sensor_values.append(value)
-        if len(sensor_values) > 100:
-            sensor_values.pop(0)
-    except:
-        pass
+        payload = msg.payload.decode()
+        data = json.loads(payload)  # parse JSON
+        if "temperature" in data:
+            temperature_values.append(float(data["temperature"]))
+            if len(temperature_values) > 100:
+                temperature_values.pop(0)
+        if "humidity" in data:
+            humidity_values.append(float(data["humidity"]))
+            if len(humidity_values) > 100:
+                humidity_values.pop(0)
+    except Exception as e:
+        print("Error parsing MQTT message:", e)
 
 client = mqtt.Client()
-client.connect("localhost", 1883)  # your digital broker
-client.subscribe("digital/sensor/temp")
+client.username_pw_set("admin", "admin123")   # credentials
+client.connect("192.168.20.2", 1883)          # digital broker
+client.subscribe("sensors/digital/data")      # topic
 client.on_message = on_message
 client.loop_start()
 
@@ -32,8 +42,9 @@ class Dashboard(QWidget):
         layout = QVBoxLayout()
 
         # Sensor Graph
-        self.plot = pg.PlotWidget(title="Sensor Data")
-        self.curve = self.plot.plot(pen='y')
+        self.plot = pg.PlotWidget(title="Temperature & Humidity")
+        self.temp_curve = self.plot.plot(pen='r', name="Temperature")
+        self.hum_curve = self.plot.plot(pen='b', name="Humidity")
         layout.addWidget(self.plot)
 
         # Device Status
@@ -49,8 +60,10 @@ class Dashboard(QWidget):
 
     def update_dashboard(self):
         # Update sensor graph
-        if sensor_values:
-            self.curve.setData(sensor_values)
+        if temperature_values:
+            self.temp_curve.setData(temperature_values)
+        if humidity_values:
+            self.hum_curve.setData(humidity_values)
 
         # Update system usage
         cpu = psutil.cpu_percent(interval=0.1)
