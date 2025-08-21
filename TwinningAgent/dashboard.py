@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
 import sys
 import json
+import time
 import psutil
 import paho.mqtt.client as mqtt
 from datetime import datetime
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 
 # -------------------- Data Buffers --------------------
@@ -11,20 +13,24 @@ time_stamps = []
 temperature_values = []
 humidity_values = []
 
+# Hover settings
+HOVER_HIDE_SECONDS = 2.0  # hide crosshair after this many seconds of no mouse movement
+
 # -------------------- MQTT Callback --------------------
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
+        # ensure timestamp is parseable (ISO format expected)
         timestamp = datetime.fromisoformat(data["timestamp"])
-        temp = data["temperature"]
-        hum = data["humidity"]
+        temp = float(data["temperature"])
+        hum = float(data["humidity"])
 
         time_stamps.append(timestamp)
         temperature_values.append(temp)
         humidity_values.append(hum)
 
         # Keep only last 5 minutes of data
-        while (time_stamps[-1] - time_stamps[0]).seconds > 300:
+        while len(time_stamps) > 1 and (time_stamps[-1] - time_stamps[0]).total_seconds() > 300:
             time_stamps.pop(0)
             temperature_values.pop(0)
             humidity_values.pop(0)
@@ -62,6 +68,18 @@ class Dashboard(QtWidgets.QWidget):
             name="Temperature"
         )
 
+        # Crosshair/tooltip for temp
+        self.vLine_temp = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+        self.hLine_temp = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+        self.label_temp = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
+        # start hidden
+        self.vLine_temp.hide()
+        self.hLine_temp.hide()
+        self.label_temp.hide()
+        self.temp_plot.addItem(self.vLine_temp, ignoreBounds=True)
+        self.temp_plot.addItem(self.hLine_temp, ignoreBounds=True)
+        self.temp_plot.addItem(self.label_temp)
+
         # ---------------- Humidity Plot ----------------
         self.graph_widget.nextRow()
         self.hum_plot = self.graph_widget.addPlot(
@@ -74,7 +92,18 @@ class Dashboard(QtWidgets.QWidget):
             name="Humidity"
         )
 
-        # Status label
+        # Crosshair/tooltip for hum
+        self.vLine_hum = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('b', style=QtCore.Qt.DashLine))
+        self.hLine_hum = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('b', style=QtCore.Qt.DashLine))
+        self.label_hum = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
+        self.vLine_hum.hide()
+        self.hLine_hum.hide()
+        self.label_hum.hide()
+        self.hum_plot.addItem(self.vLine_hum, ignoreBounds=True)
+        self.hum_plot.addItem(self.hLine_hum, ignoreBounds=True)
+        self.hum_plot.addItem(self.label_hum)
+
+        # Status + usage label
         self.status_label = QtWidgets.QLabel("Initializing...")
         layout.addWidget(self.status_label)
 
@@ -86,25 +115,21 @@ class Dashboard(QtWidgets.QWidget):
         # Enable anti-aliasing for smoother curves
         pg.setConfigOptions(antialias=True)
 
-        # ---------------- Hover Crosshair + Label ----------------
-        self.vLine_temp = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
-        self.hLine_temp = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
-        self.temp_plot.addItem(self.vLine_temp, ignoreBounds=True)
-        self.temp_plot.addItem(self.hLine_temp, ignoreBounds=True)
-        self.label_temp = pg.TextItem(anchor=(0,1))
-        self.temp_plot.addItem(self.label_temp)
-
-        self.vLine_hum = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen('b', style=QtCore.Qt.DashLine))
-        self.hLine_hum = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen('b', style=QtCore.Qt.DashLine))
-        self.hum_plot.addItem(self.vLine_hum, ignoreBounds=True)
-        self.hum_plot.addItem(self.hLine_hum, ignoreBounds=True)
-        self.label_hum = pg.TextItem(anchor=(0,1))
-        self.hum_plot.addItem(self.label_hum)
-
-        # Connect mouse move signals
+        # Connect mouse move signals for hover detection
         self.temp_plot.scene().sigMouseMoved.connect(self.on_mouse_moved_temp)
         self.hum_plot.scene().sigMouseMoved.connect(self.on_mouse_moved_hum)
 
+        # Track last hover times (seconds since epoch)
+        self.last_mouse_time_temp = 0.0
+        self.last_mouse_time_hum = 0.0
+
+        # Ensure view-resize hooks (so we can clamp labels)
+        def update_temp_view():
+            pass
+        self.temp_plot.vb.sigResized.connect(update_temp_view)
+        self.hum_plot.vb.sigResized.connect(update_temp_view)
+
+    # ---------------- UI Update ----------------
     def update_dashboard(self):
         if not time_stamps:
             return
@@ -112,20 +137,33 @@ class Dashboard(QtWidgets.QWidget):
         # Convert timestamps to epoch seconds
         times_epoch = [t.timestamp() for t in time_stamps]
 
-        # Update plots
+        # Update plots data
         self.temp_curve.setData(times_epoch, temperature_values)
         self.hum_curve.setData(times_epoch, humidity_values)
 
-        # Auto-scroll X range (last 5 min)
-        if times_epoch:
-            self.temp_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
-            self.hum_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
+        # Auto-scroll X range (last 5 min) if not hovering recently
+        now_ts = time.time()
+        # if neither hovered recently, we auto-follow newest
+        if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS and (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
+            if times_epoch:
+                self.temp_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
+                self.hum_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
 
-        # Auto-scale Y
+        # Auto-scale Y when not hovering (still okay to auto-range)
         self.temp_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.hum_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
-        # System usage
+        # Hide crosshairs/labels if hover timeout passed
+        if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS:
+            self.vLine_temp.hide()
+            self.hLine_temp.hide()
+            self.label_temp.hide()
+        if (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
+            self.vLine_hum.hide()
+            self.hLine_hum.hide()
+            self.label_hum.hide()
+
+        # System usage (this machine)
         cpu = psutil.cpu_percent(interval=0.1)
         ram = psutil.virtual_memory().percent
         self.status_label.setText(
@@ -134,41 +172,68 @@ class Dashboard(QtWidgets.QWidget):
 
     # ---------------- Hover Handlers ----------------
     def on_mouse_moved_temp(self, pos):
+        """Show crosshair and tooltip, clamp tooltip inside view."""
         if not time_stamps:
             return
         vb = self.temp_plot.vb
         mouse_point = vb.mapSceneToView(pos)
         x = mouse_point.x()
-        if len(time_stamps) > 0:
-            # Find closest index
-            times_epoch = [t.timestamp() for t in time_stamps]
-            idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
-            if 0 <= idx < len(times_epoch):
-                self.vLine_temp.setPos(times_epoch[idx])
-                self.hLine_temp.setPos(temperature_values[idx])
-                self.label_temp.setHtml(
-                    f"<span style='color:red'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>"
-                    f"Temp: {temperature_values[idx]:.2f}°C</span>"
-                )
-                self.label_temp.setPos(times_epoch[idx], temperature_values[idx])
+        times_epoch = [t.timestamp() for t in time_stamps]
+
+        # find closest index
+        idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
+        if 0 <= idx < len(times_epoch):
+            # Update last mouse time
+            self.last_mouse_time_temp = time.time()
+            # Show lines
+            self.vLine_temp.setPos(times_epoch[idx])
+            self.hLine_temp.setPos(temperature_values[idx])
+            self.vLine_temp.show()
+            self.hLine_temp.show()
+
+            # Prepare label text
+            txt = f"<span style='color:red'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>Temp: {temperature_values[idx]:.2f}°C</span>"
+            self.label_temp.setHtml(txt)
+
+            # Clamp label position inside view rect
+            x_min, x_max = vb.viewRange()[0]
+            y_min, y_max = vb.viewRange()[1]
+            # margins (10% of range)
+            x_margin = max(1.0, (x_max - x_min) * 0.05)
+            y_margin = max(0.1, (y_max - y_min) * 0.05)
+            label_x = min(max(times_epoch[idx], x_min + x_margin), x_max - x_margin)
+            label_y = min(max(temperature_values[idx], y_min + y_margin), y_max - y_margin)
+            self.label_temp.setPos(label_x, label_y)
+            self.label_temp.show()
 
     def on_mouse_moved_hum(self, pos):
+        """Show crosshair and tooltip for humidity, clamp tooltip inside view."""
         if not time_stamps:
             return
         vb = self.hum_plot.vb
         mouse_point = vb.mapSceneToView(pos)
         x = mouse_point.x()
-        if len(time_stamps) > 0:
-            times_epoch = [t.timestamp() for t in time_stamps]
-            idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
-            if 0 <= idx < len(times_epoch):
-                self.vLine_hum.setPos(times_epoch[idx])
-                self.hLine_hum.setPos(humidity_values[idx])
-                self.label_hum.setHtml(
-                    f"<span style='color:blue'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>"
-                    f"Humidity: {humidity_values[idx]:.2f}%</span>"
-                )
-                self.label_hum.setPos(times_epoch[idx], humidity_values[idx])
+        times_epoch = [t.timestamp() for t in time_stamps]
+
+        idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
+        if 0 <= idx < len(times_epoch):
+            self.last_mouse_time_hum = time.time()
+            self.vLine_hum.setPos(times_epoch[idx])
+            self.hLine_hum.setPos(humidity_values[idx])
+            self.vLine_hum.show()
+            self.hLine_hum.show()
+
+            txt = f"<span style='color:blue'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>Humidity: {humidity_values[idx]:.2f}%</span>"
+            self.label_hum.setHtml(txt)
+
+            vb_x_min, vb_x_max = vb.viewRange()[0]
+            vb_y_min, vb_y_max = vb.viewRange()[1]
+            x_margin = max(1.0, (vb_x_max - vb_x_min) * 0.05)
+            y_margin = max(0.1, (vb_y_max - vb_y_min) * 0.05)
+            label_x = min(max(times_epoch[idx], vb_x_min + x_margin), vb_x_max - x_margin)
+            label_y = min(max(humidity_values[idx], vb_y_min + y_margin), vb_y_max - y_margin)
+            self.label_hum.setPos(label_x, label_y)
+            self.label_hum.show()
 
 # -------------------- Main --------------------
 def main():
