@@ -50,47 +50,28 @@ class Dashboard(QtWidgets.QWidget):
         self.graph_widget = pg.GraphicsLayoutWidget()
         layout.addWidget(self.graph_widget)
 
-        # Custom X-axis with time
-        self.plot = self.graph_widget.addPlot(
-            title="Temperature & Humidity (Live)",
-            axisItems={'bottom': TimeAxisItem(orientation='bottom')}
+        # ---------------- Temperature Plot ----------------
+        self.temp_plot = self.graph_widget.addPlot(
+            title="Temperature (°C)", axisItems={'bottom': TimeAxisItem(orientation='bottom')}
         )
-        self.plot.setLabel('left', 'Temperature (°C)', color='red')
-        self.plot.showGrid(x=True, y=True, alpha=0.3)
-
-        # Temperature curve (left axis)
-        self.temp_curve = self.plot.plot(
+        self.temp_plot.setLabel('left', 'Temperature (°C)', color='red')
+        self.temp_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.temp_curve = self.temp_plot.plot(
             pen=pg.mkPen('r', width=2),
-            symbol='o',
-            symbolBrush='r',
             name="Temperature"
         )
 
-        # Secondary Y-axis for humidity
-        self.hum_plot = pg.ViewBox()
-        self.plot.showAxis('right')
-        self.plot.scene().addItem(self.hum_plot)
-        self.plot.getAxis('right').linkToView(self.hum_plot)
-        self.hum_plot.setXLink(self.plot)
-
-        # Humidity curve
-        self.hum_curve = pg.PlotCurveItem(
+        # ---------------- Humidity Plot ----------------
+        self.graph_widget.nextRow()
+        self.hum_plot = self.graph_widget.addPlot(
+            title="Humidity (%)", axisItems={'bottom': TimeAxisItem(orientation='bottom')}
+        )
+        self.hum_plot.setLabel('left', 'Humidity (%)', color='blue')
+        self.hum_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.hum_curve = self.hum_plot.plot(
             pen=pg.mkPen('b', width=2),
-            symbol='x',
-            symbolBrush='b',
             name="Humidity"
         )
-        self.hum_plot.addItem(self.hum_curve)
-        self.plot.getAxis('right').setLabel("Humidity (%)", color='blue')
-
-        # Link resize
-        def updateViews():
-            self.hum_plot.setGeometry(self.plot.vb.sceneBoundingRect())
-            self.hum_plot.linkedViewChanged(self.plot.vb, self.hum_plot.XAxis)
-        self.plot.vb.sigResized.connect(updateViews)
-
-        # Add legend
-        self.plot.addLegend()
 
         # Status label
         self.status_label = QtWidgets.QLabel("Initializing...")
@@ -117,10 +98,11 @@ class Dashboard(QtWidgets.QWidget):
 
         # Auto-scroll X range (last 5 min)
         if times_epoch:
-            self.plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
+            self.temp_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
+            self.hum_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
 
-        # Auto-scale Y separately
-        self.plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        # Auto-scale Y
+        self.temp_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.hum_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
         # System usage
