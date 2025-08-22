@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # dashboard.py
 # Full IoT Consumer dashboard: RTSP video + temperature (red) + humidity (yellow)
-# Includes robust Qt plugin handling and correct PyQt5 imports.
+# Hardened for long runs: MQTT auto-reconnect, clean shutdown, bounded buffers, video watchdog.
 
 import os
 import sys
@@ -10,7 +10,10 @@ import time
 import psutil
 import paho.mqtt.client as mqtt
 import cv2
-from datetime import datetime
+from datetime import datetime, timedelta
+
+# -------- Optional: use software OpenGL to avoid GPU/driver issues on some boxes --------
+# os.environ.setdefault("QT_OPENGL", "software")
 
 # Make Qt pick up system plugins (try common paths)
 _possible_qt_paths = [
@@ -26,46 +29,77 @@ for _p in _possible_qt_paths:
 # Force XCB platform by default (works for most X11 setups)
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-# Now import PyQt5 (after env vars set)
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QLabel, QPushButton,
-    QHBoxLayout, QVBoxLayout
-)
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout
 from PyQt5 import QtCore, QtGui
 import pyqtgraph as pg
 
 # ---------------- CONFIG ----------------
-STREAM_URL = "rtsp://192.168.20.2:8554/proxied"   # <-- set your RTSP stream URL here
+STREAM_URL = "rtsp://192.168.20.2:8554/proxied"
 MQTT_BROKER = "192.168.20.2"
 MQTT_USER = "admin"
 MQTT_PASS = "admin123"
 MQTT_TOPIC = "sensors/digital/data"
+MQTT_PORT = 1883
+MQTT_KEEPALIVE = 30  # seconds
+
+# Data buffer limits
+HISTORY_SECONDS = 300        # 5 minutes
+MAX_POINTS = 2000            # hard cap to prevent creep
+
+# Hover timeout
+HOVER_HIDE_SECONDS = 5.0
+
+# No-frame watchdog (video)
+NO_FRAME_TIMEOUT_S = 10
 
 # -------------------- Data Buffers --------------------
 time_stamps = []
 temperature_values = []
 humidity_values = []
 
-# Hover timeout
-HOVER_HIDE_SECONDS = 5.0
+# -------------------- MQTT Callbacks --------------------
+class MqttState:
+    connected = False
+mqtt_state = MqttState()
 
-# -------------------- MQTT Callback --------------------
+def trim_buffers():
+    """Enforce time-based (5 min) and count-based (MAX_POINTS) limits."""
+    # Time-based
+    if len(time_stamps) > 1:
+        while time_stamps and (time_stamps[-1] - time_stamps[0]).total_seconds() > HISTORY_SECONDS:
+            time_stamps.pop(0); temperature_values.pop(0); humidity_values.pop(0)
+    # Count-based
+    excess = len(time_stamps) - MAX_POINTS
+    if excess > 0:
+        del time_stamps[:excess]; del temperature_values[:excess]; del humidity_values[:excess]
+
+def on_connect(client, userdata, flags, rc):
+    mqtt_state.connected = (rc == 0)
+    if mqtt_state.connected:
+        client.subscribe(MQTT_TOPIC, qos=0)
+
+def on_disconnect(client, userdata, rc):
+    mqtt_state.connected = False
+    # paho will auto-reconnect because we use loop_start + reconnect_delay_set
+
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        timestamp = datetime.fromisoformat(data["timestamp"])
+        # guard: tolerate timestamp with/without fractional seconds
+        ts_raw = data.get("timestamp")
+        if isinstance(ts_raw, str):
+            # fromisoformat handles "YYYY-mm-ddTHH:MM:SS[.ffffff]"
+            timestamp = datetime.fromisoformat(ts_raw)
+        else:
+            timestamp = datetime.utcnow()
+
         temp = float(data["temperature"])
         hum = float(data["humidity"])
 
         time_stamps.append(timestamp)
         temperature_values.append(temp)
         humidity_values.append(hum)
-
-        # Keep only last 5 minutes of data
-        while len(time_stamps) > 1 and (time_stamps[-1] - time_stamps[0]).total_seconds() > 300:
-            time_stamps.pop(0)
-            temperature_values.pop(0)
-            humidity_values.pop(0)
+        trim_buffers()
 
     except Exception as e:
         print("Error parsing MQTT message:", e)
@@ -80,6 +114,7 @@ class VideoThread(QtCore.QThread):
         self.url = url
         self.running = True
         self._cap = None
+        self._last_frame_ts = 0.0
 
     def run(self):
         while self.running:
@@ -92,21 +127,29 @@ class VideoThread(QtCore.QThread):
                     time.sleep(2)
                     continue
 
+                self._last_frame_ts = time.time()
                 while self.running and self._cap.isOpened():
                     ret, frame = self._cap.read()
                     if not ret or frame is None:
                         self.status_changed.emit(False)
                         break
+
+                    self._last_frame_ts = time.time()
+
                     # Convert BGR -> RGB
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     h, w, ch = rgb.shape
                     bytes_per_line = ch * w
                     qt_image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-                    # emit copy (safe)
                     self.frame_received.emit(qt_image.copy())
                     self.status_changed.emit(True)
-                    # small sleep to avoid busy loop; keeps UI responsive
+
+                    # Watchdog: if no frame for too long, restart capture
+                    if time.time() - self._last_frame_ts > NO_FRAME_TIMEOUT_S:
+                        break
+
                     QtCore.QThread.msleep(20)
+
                 self._safe_release()
                 time.sleep(1)
             except Exception as e:
@@ -130,9 +173,8 @@ class VideoThread(QtCore.QThread):
                     self._cap.release()
                 except Exception:
                     pass
-            self._cap = None
         finally:
-            pass
+            self._cap = None
 
 # -------------------- Custom Time Axis --------------------
 class TimeAxisItem(pg.AxisItem):
@@ -142,10 +184,11 @@ class TimeAxisItem(pg.AxisItem):
 
 # -------------------- Dashboard Widget --------------------
 class Dashboard(QWidget):
-    def __init__(self):
+    def __init__(self, mqtt_client):
         super().__init__()
         self.setWindowTitle("Digital Twin IoT Dashboard")
         self.resize(1200, 720)
+        self.mqtt_client = mqtt_client
 
         main_layout = QVBoxLayout(self)
 
@@ -220,9 +263,9 @@ class Dashboard(QWidget):
 
         # Hover crosshairs and labels for temp
         self.vLine_temp = pg.InfiniteLine(angle=90, movable=False,
-                                         pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+                                          pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
         self.hLine_temp = pg.InfiniteLine(angle=0, movable=False,
-                                         pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+                                          pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
         self.label_temp = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
         self.vLine_temp.hide(); self.hLine_temp.hide(); self.label_temp.hide()
         self.temp_plot.addItem(self.vLine_temp, ignoreBounds=True)
@@ -231,9 +274,9 @@ class Dashboard(QWidget):
 
         # Hover crosshairs and labels for hum
         self.vLine_hum = pg.InfiniteLine(angle=90, movable=False,
-                                        pen=pg.mkPen(color=(255,215,0), style=QtCore.Qt.DashLine))
+                                         pen=pg.mkPen(color=(255,215,0), style=QtCore.Qt.DashLine))
         self.hLine_hum = pg.InfiniteLine(angle=0, movable=False,
-                                        pen=pg.mkPen(color=(255,215,0), style=QtCore.Qt.DashLine))
+                                         pen=pg.mkPen(color=(255,215,0), style=QtCore.Qt.DashLine))
         self.label_hum = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
         self.vLine_hum.hide(); self.hLine_hum.hide(); self.label_hum.hide()
         self.hum_plot.addItem(self.vLine_hum, ignoreBounds=True)
@@ -256,8 +299,8 @@ class Dashboard(QWidget):
 
         # Video thread
         self.video_thread = VideoThread(STREAM_URL)
-        self.video_thread.frame_received.connect(self.on_frame)
-        self.video_thread.status_changed.connect(self.on_stream_status)
+        self.video_thread.frame_received.connect(self.on_frame, QtCore.Qt.QueuedConnection)
+        self.video_thread.status_changed.connect(self.on_stream_status, QtCore.Qt.QueuedConnection)
         self.video_thread.start()
         self.stream_paused = False
 
@@ -268,9 +311,13 @@ class Dashboard(QWidget):
     def on_frame(self, qimage):
         if self.stream_paused:
             return
-        pix = QtGui.QPixmap.fromImage(qimage)
-        pix = pix.scaled(self.video_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        self.video_label.setPixmap(pix)
+        try:
+            pix = QtGui.QPixmap.fromImage(qimage)
+            pix = pix.scaled(self.video_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.video_label.setPixmap(pix)
+        except Exception:
+            # Ignore intermittent paint errors
+            pass
 
     def on_stream_status(self, up: bool):
         self.stream_status_label.setText("Stream: UP" if up else "Stream: DOWN")
@@ -279,6 +326,12 @@ class Dashboard(QWidget):
             self.video_label.setPixmap(QtGui.QPixmap())
 
     def update_dashboard(self):
+        # MQTT/host status line
+        cpu = psutil.cpu_percent(interval=0.05)
+        ram = psutil.virtual_memory().percent
+        mqtt_txt = "MQTT: UP" if mqtt_state.connected else "MQTT: DOWN (reconnecting)"
+        self.status_label.setText(f"Router: UP | Broker: UP | Sensor: UP | {mqtt_txt}    CPU: {cpu}%   RAM: {ram}%")
+
         if not time_stamps:
             self.temp_latest_label.setText("Latest Temp: --")
             self.hum_latest_label.setText("Latest Humidity: --")
@@ -301,8 +354,8 @@ class Dashboard(QWidget):
         now_ts = time.time()
         if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS and (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
             if times_epoch:
-                self.temp_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
-                self.hum_plot.setXRange(times_epoch[-1] - 300, times_epoch[-1])
+                self.temp_plot.setXRange(times_epoch[-1] - HISTORY_SECONDS, times_epoch[-1])
+                self.hum_plot.setXRange(times_epoch[-1] - HISTORY_SECONDS, times_epoch[-1])
 
         # auto-range Ys
         self.temp_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
@@ -313,10 +366,6 @@ class Dashboard(QWidget):
             self.vLine_temp.hide(); self.hLine_temp.hide(); self.label_temp.hide()
         if (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
             self.vLine_hum.hide(); self.hLine_hum.hide(); self.label_hum.hide()
-
-        cpu = psutil.cpu_percent(interval=0.1)
-        ram = psutil.virtual_memory().percent
-        self.status_label.setText(f"Router: UP | Broker: UP | Sensor: UP    CPU: {cpu}%   RAM: {ram}%")
 
     def on_mouse_moved_temp(self, pos):
         if not time_stamps: return
@@ -357,26 +406,54 @@ class Dashboard(QWidget):
             self.label_hum.setPos(label_x, label_y); self.label_hum.show()
 
     def closeEvent(self, event):
+        # Stop video thread
         try:
             self.video_thread.stop()
+        except Exception:
+            pass
+        # Cleanly stop MQTT
+        try:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
         except Exception:
             pass
         event.accept()
 
 # -------------------- Main --------------------
 def main():
+    # Qt app
     app = QApplication(sys.argv)
-    dashboard = Dashboard()
-    dashboard.show()
 
+    # MQTT client
     client = mqtt.Client()
     client.username_pw_set(MQTT_USER, MQTT_PASS)
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
     client.on_message = on_message
-    client.connect(MQTT_BROKER, 1883, 60)
-    client.subscribe(MQTT_TOPIC)
+    # automatic reconnect backoff
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
+    client.will_set("system/dashboard/status", payload="offline", qos=0, retain=False)
+
+    # initial connect (non-blocking)
+    try:
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
+    except Exception as e:
+        print("Initial MQTT connect failed:", e)
     client.loop_start()
 
-    sys.exit(app.exec_())
+    dashboard = Dashboard(client)
+    dashboard.show()
+
+    rc = app.exec_()
+
+    # Ensure cleanup if not already
+    try:
+        client.loop_stop()
+        client.disconnect()
+    except Exception:
+        pass
+
+    sys.exit(rc)
 
 if __name__ == "__main__":
     main()
