@@ -47,7 +47,7 @@ temperature_values = []
 humidity_values = []
 
 # Hover timeout
-HOVER_HIDE_SECONDS = 2.0
+HOVER_HIDE_SECONDS = 5.0
 
 # -------------------- MQTT Callback --------------------
 def on_message(client, userdata, msg):
