@@ -1,0 +1,42 @@
+gns3:
+  url: "http://127.0.0.1:3080/v2"
+  user: "admin"
+  password: "yourpass"
+  project_id: "xxxx-xxxx-xxxx"   # put your GNS3 project UUID here
+
+devices:
+  physical:
+    router:
+      ip: 192.168.10.1
+      bind_ip: 192.168.10.241
+      gns3_node_id: "uuid-router-digital"
+    broker:
+      ip: 192.168.20.2
+      bind_ip: 192.168.10.241
+      gns3_node_id: "uuid-broker-digital"
+    ipcam:
+      ip: 192.168.254.3
+      bind_ip: 192.168.10.241
+      gns3_node_id: "uuid-ipcam-digital"
+    sensor:
+      ip: 192.168.254.15
+      bind_ip: 192.168.10.241
+      gns3_node_id: "uuid-sensor-digital"
+
+  digital:
+    router:
+      ip: 192.168.10.1
+      bind_ip: 192.168.10.242
+      gns3_node_id: "uuid-router-digital"
+    broker:
+      ip: 192.168.20.2
+      bind_ip: 192.168.10.242
+      gns3_node_id: "uuid-broker-digital"
+    ipcam:
+      ip: 192.168.254.11
+      bind_ip: 192.168.10.242
+      gns3_node_id: "uuid-ipcam-digital"
+    sensor:
+      ip: 192.168.254.10
+      bind_ip: 192.168.10.242
+      gns3_node_id: "uuid-sensor-digital"
