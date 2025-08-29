@@ -2,6 +2,7 @@
 """
 broker_agent.py
 Run on the physical broker host.
+
 - Pings sensor and ipcam IPs
 - Optionally checks that sensor publishes by subscribing briefly to a configured topic
 - Publishes health/<broker>/<target> messages
@@ -12,18 +13,24 @@ from datetime import datetime
 import paho.mqtt.client as mqtt
 
 LOGFILE = "/var/log/broker_agent.log"
-logging.basicConfig(filename=LOGFILE, level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logging.basicConfig(filename=LOGFILE, level=logging.INFO,
+                    format="%(asctime)s %(levelname)s: %(message)s")
 
 def ping_once(dest, timeout=2):
-    return subprocess.call(["ping","-c","1","-W",str(timeout), dest],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+    return subprocess.call(
+        ["ping", "-c", "1", "-W", str(timeout), dest],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ) == 0
 
 def now_iso():
     return datetime.utcnow().isoformat()
 
 class BrokerAgent:
-    def __init__(self, name, peers, mqtt_broker, mqtt_user=None, mqtt_pass=None,
-                 interval=10, fail_threshold=3, recover_threshold=3, mqtt_probe_topic=None):
+    def __init__(self, name, peers, mqtt_broker,
+                 mqtt_user=None, mqtt_pass=None,
+                 interval=10, fail_threshold=3, recover_threshold=3,
+                 mqtt_probe_topic=None):
+
         self.name = name
         self.peers = peers
         self.mqtt_broker = mqtt_broker
@@ -34,13 +41,31 @@ class BrokerAgent:
         self.recover_th = recover_threshold
         self.mqtt_probe_topic = mqtt_probe_topic
 
-        self.fail_counts = {k:0 for k in peers}
-        self.success_counts = {k:0 for k in peers}
+        self.fail_counts = {k: 0 for k in peers}
+        self.success_counts = {k: 0 for k in peers}
         self.status = {k: True for k in peers}
 
-        self.mqtt = mqtt.Client(f"broker-agent-{self.name}")
+        # --- FIX: use v2 API ---
+        self.mqtt = mqtt.Client(
+            client_id=f"broker-agent-{self.name}",
+            protocol=mqtt.MQTTv311,
+            transport="tcp",
+            userdata=None,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+        )
         if mqtt_user and mqtt_pass:
             self.mqtt.username_pw_set(mqtt_user, mqtt_pass)
+
+        # optional logging callbacks (v2 signature)
+        def on_connect(client, userdata, flags, reason_code, properties=None):
+            logging.info("Connected to MQTT %s with reason=%s", self.mqtt_broker, reason_code)
+        self.mqtt.on_connect = on_connect
+
+        def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
+            logging.warning("Disconnected from MQTT %s reason=%s", self.mqtt_broker, reason_code)
+        self.mqtt.on_disconnect = on_disconnect
+        # --- end fix ---
+
         self.mqtt.connect(self.mqtt_broker, 1883, 60)
         self.mqtt.loop_start()
 
@@ -56,16 +81,25 @@ class BrokerAgent:
     def mqtt_recent_message(self, topic, timeout=3):
         """Quick subscribe for 'timeout' seconds to see if any message arrives."""
         got = {"ok": False}
-        c = mqtt.Client(f"probe-check-{self.name}")
+
+        c = mqtt.Client(
+            client_id=f"probe-check-{self.name}",
+            protocol=mqtt.MQTTv311,
+            transport="tcp",
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+        )
         if self.mqtt_user and self.mqtt_pass:
             c.username_pw_set(self.mqtt_user, self.mqtt_pass)
+
         def on_msg(client, userdata, msg):
             got["ok"] = True
             try:
                 client.disconnect()
             except:
                 pass
+
         c.on_message = on_msg
+
         try:
             c.connect(self.mqtt_broker, 1883, 5)
             c.subscribe(topic)
@@ -77,7 +111,8 @@ class BrokerAgent:
             pass
         finally:
             try:
-                c.loop_stop(); c.disconnect()
+                c.loop_stop()
+                c.disconnect()
             except:
                 pass
         return got["ok"]
@@ -86,6 +121,8 @@ class BrokerAgent:
         for target, info in self.peers.items():
             ip = info.get("ip")
             ok = ping_once(ip)
+
+            # optional MQTT check
             if not ok and self.mqtt_probe_topic and info.get("check_mqtt"):
                 ok = self.mqtt_recent_message(self.mqtt_probe_topic, timeout=3) or ok
 
@@ -100,12 +137,14 @@ class BrokerAgent:
             if self.fail_counts[target] >= self.fail_th and prev:
                 self.status[target] = False
                 self.publish(target, "DOWN")
+
             if self.success_counts[target] >= self.recover_th and not prev:
                 self.status[target] = True
                 self.publish(target, "UP")
 
     def run_forever(self):
-        logging.info("Broker agent started for %s peers=%s", self.name, list(self.peers.keys()))
+        logging.info("Broker agent started for %s peers=%s",
+                     self.name, list(self.peers.keys()))
         while True:
             try:
                 self.step()
@@ -116,7 +155,8 @@ class BrokerAgent:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", required=True)
-    parser.add_argument("--peers", required=True, help='JSON mapping of peers')
+    parser.add_argument("--peers", required=True,
+                        help='JSON mapping of peers')
     parser.add_argument("--broker", default="192.168.20.2")
     parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--fail", type=int, default=3)
@@ -126,7 +166,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     peers = json.loads(args.peers)
-    agent = BrokerAgent(args.name, peers, mqtt_broker=args.broker, interval=args.interval,
-                        fail_threshold=args.fail, recover_threshold=args.recover,
-                        mqtt_probe_topic=args.mqtt_topic)
+
+    agent = BrokerAgent(
+        args.name, peers,
+        mqtt_broker=args.broker,
+        interval=args.interval,
+        fail_threshold=args.fail,
+        recover_threshold=args.recover,
+        mqtt_probe_topic=args.mqtt_topic
+    )
     agent.run_forever()
