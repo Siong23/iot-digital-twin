@@ -28,7 +28,7 @@ class RouterProbe:
         self.fail_counts = {k:0 for k in peers}
         self.success_counts = {k:0 for k in peers}
         self.status = {k: True for k in peers}
-        self.mqtt = mqtt.Client("router-probe")
+        self.mqtt = mqtt.Client(client_id="router-probe", callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         self.mqtt.connect(mqtt_broker, 1883, 60)
         self.mqtt.loop_start()
 
