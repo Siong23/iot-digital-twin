@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """
-sync_status_full.py
-
-Proxy master:
-- Pings physical devices → stop/start digital nodes via GNS3 API
-- Subscribes to device-side health reports (MQTT topic: health/<src>/<dst>)
-- Blocks/unblocks digital-side connections (iptables) when device-reported connections fail
-- Proxy is authoritative: if proxy can't reach a device, it is considered DOWN and overrides connection reports.
-
-This version reads monitoring thresholds and MQTT settings from devices.yaml under the `monitor` and `mqtt` blocks.
+sync_status_full.py (updated)
+- Explicit MQTT client API version (MQTTv311 + callback API v2)
+- Uses YAML `connections` per-device to build expected connection matrix
+- Initializes counters dynamically from YAML
 """
 
 import os
@@ -17,7 +12,6 @@ import json
 import yaml
 import logging
 import subprocess
-import threading
 import signal
 import sys
 from typing import Dict, Tuple
@@ -84,6 +78,9 @@ gns3_node_running: Dict[str,bool] = {}
 # MQTT client (initialized later)
 mqtt_client = None
 
+# expected mapping (built dynamically from YAML)
+expected_connections: Dict[str, list] = {}
+
 # Graceful shutdown flag
 _running = True
 
@@ -94,6 +91,7 @@ def load_config(path=CONFIG_FILE):
     global DEVICE_FAIL_THRESHOLD, DEVICE_RECOVER_THRESHOLD
     global CONN_FAIL_THRESHOLD, CONN_RECOVER_THRESHOLD
     global IPTABLES_CHAIN, MQTT_CLIENT_ID, MQTT_KEEPALIVE
+    global expected_connections
 
     with open(path) as f:
         cfg = yaml.safe_load(f)
@@ -124,10 +122,30 @@ def load_config(path=CONFIG_FILE):
     MQTT_CLIENT_ID = mqtt_cfg.get("client_id", DEFAULTS["MQTT_CLIENT_ID"])
     MQTT_KEEPALIVE = int(mqtt_cfg.get("keepalive", DEFAULTS["MQTT_KEEPALIVE"]))
 
+    # build expected connections from YAML `devices.physical[*].connections`
+    expected_connections = {}
+    phys = cfg.get("devices", {}).get("physical", {})
+    for name, info in phys.items():
+        conns = info.get("connections")
+        if isinstance(conns, list):
+            expected_connections[name] = conns[:]
+        else:
+            expected_connections[name] = []
+
+    # fallback (if empty) - keep the previous default mapping
+    if not any(expected_connections.values()):
+        expected_connections = {
+            "broker": ["sensor", "ipcam"],
+            "router": ["broker", "ipcam", "sensor"],
+            "sensor": ["broker", "router"],
+            "ipcam": []
+        }
+
     logging.info(
         "Runtime params: CHECK_INTERVAL=%s, DEVICE_FAIL_THRESHOLD=%s, DEVICE_RECOVER_THRESHOLD=%s, CONN_FAIL_THRESHOLD=%s, CONN_RECOVER_THRESHOLD=%s, IPTABLES_CHAIN=%s",
         CHECK_INTERVAL, DEVICE_FAIL_THRESHOLD, DEVICE_RECOVER_THRESHOLD, CONN_FAIL_THRESHOLD, CONN_RECOVER_THRESHOLD, IPTABLES_CHAIN
     )
+    logging.info("Expected connections: %s", expected_connections)
 
 def ping(ip: str, bind_ip: str = None) -> bool:
     """Ping an IP using the system ping command. Returns True if reachable."""
@@ -216,8 +234,8 @@ def remove_block(src_ip: str, dst_ip: str):
         logging.exception("Failed to remove iptables rule: %s", e)
 
 # ---------------- MQTT handling for device reports ----------------
-def on_mqtt_connect(client, userdata, flags, rc):
-    logging.info("Connected to MQTT broker (rc=%s) -- subscribing to health/#", rc)
+def on_mqtt_connect(client, userdata, flags, reason_code, properties=None):
+    logging.info("Connected to MQTT broker (reason=%s) -- subscribing to health/#", reason_code)
     prefix = cfg.get("monitor", {}).get("mqtt_prefix", "health")
     client.subscribe(f"{prefix}/#")
 
@@ -315,20 +333,15 @@ def process_connection_reports():
     phys = cfg["devices"]["physical"]
     digi = cfg["devices"]["digital"]
 
-    expected = {
-        "broker": ["sensor", "ipcam"],
-        "router": ["broker", "ipcam", "sensor"],
-        "sensor": ["broker", "router"],
-        "ipcam": []
-    }
-
-    for src, targets in expected.items():
+    # Use expected_connections derived from YAML (built in load_config)
+    for src, targets in expected_connections.items():
         for dst in targets:
             key = (src, dst)
             reported_up = conn_reported_status.get(key, True)
             src_up = device_status.get(src, True)
             dst_up = device_status.get(dst, True)
             if not src_up or not dst_up:
+                # proxy authoritative: if physical src/dst down, block digital pair
                 if src in digi and dst in digi:
                     sip = digi[src]["ip"]; dip = digi[dst]["ip"]
                     if not conn_blocked.get((src,dst), False):
@@ -358,18 +371,14 @@ def process_connection_reports():
 def main_loop():
     global _running
     logging.info("Starting proxy sync main loop")
+    # initialize devices
     for name in cfg["devices"]["physical"].keys():
         device_fail_counts[name] = 0
         device_success_counts[name] = 0
         device_status[name] = True
 
-    expected = {
-        "broker": ["sensor", "ipcam"],
-        "router": ["broker", "ipcam", "sensor"],
-        "sensor": ["broker", "router"],
-        "ipcam": []
-    }
-    for s, targets in expected.items():
+    # initialize conn counters from expected_connections
+    for s, targets in expected_connections.items():
         for t in targets:
             key = (s,t)
             conn_fail_counts[key] = 0
@@ -390,7 +399,13 @@ def start_mqtt_listener():
     global mqtt_client
     broker_ip = cfg.get("mqtt", {}).get("host") or cfg["devices"]["physical"]["broker"]["ip"]
     broker_port = int(cfg.get("mqtt", {}).get("port", 1883))
-    mqtt_client = mqtt.Client(MQTT_CLIENT_ID)
+
+    # Create client explicitly with MQTTv311 and callback API v2 to match other agents
+    mqtt_client = mqtt.Client(
+        client_id=MQTT_CLIENT_ID,
+        protocol=mqtt.MQTTv311,
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+    )
     mqtt_client.on_connect = on_mqtt_connect
     mqtt_client.on_message = on_mqtt_message
     try:
