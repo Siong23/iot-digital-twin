@@ -91,7 +91,7 @@ class RouterProbe:
         transport = paramiko.Transport(sock)
         transport.start_client(timeout=timeout)
         # Use password auth; adjust for keys if needed
-        transport.auth_password(username=self.username, password=self.password, timeout=timeout)
+        transport.auth_password(self.username, self.password)
         transport.set_keepalive(self.keepalive)
         logging.info("SSH transport established")
         self.transport = transport
