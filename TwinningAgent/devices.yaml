@@ -1,23 +1,38 @@
+# devices.yaml
+# Proxy-monitor configuration: physical devices, digital twins, and relationships.
+# - Each physical device lists which other devices it should be able to reach.
+# - health_checks suggests what the device-agent should test (ping, mqtt, rtsp, ssh).
+# - monitor block contains global thresholds and MQTT topic prefix used by the proxy agent.
+
 gns3:
   url: "http://192.168.122.1:3080/v2"
   user: "admin"
   password: "Password"
-  project_id: "81600c14-839b-4a47-bca6-8bc92cdd5357"   # put your GNS3 project UUID here
+  project_id: "81600c14-839b-4a47-bca6-8bc92cdd5357"
 
 devices:
   physical:
     broker:
       ip: 192.168.20.2
       bind_ip: 192.168.10.241
+      # broker should be reachable by sensor and ipcam (broker-centric checks)
+      connections: ["sensor", "ipcam"]
+      health_checks: ["ping"]            # agent should ping peers; broker can also expose client counts
     ipcam:
       ip: 192.168.254.3
       bind_ip: 192.168.10.241
+      connections: ["broker", "router"]  # camera should be reachable by broker and router
+      health_checks: ["rtsp", "ping"]    # check RTSP and ping the peers
     sensor:
       ip: 192.168.254.15
       bind_ip: 192.168.10.241
+      connections: ["broker", "router"]
+      health_checks: ["ping", "mqtt"]   # sensor should verify MQTT publish/subscribe + ping peers
     router:
       ip: 192.168.10.1
       bind_ip: 192.168.10.241
+      connections: ["broker", "ipcam", "sensor"]
+      health_checks: ["ssh", "ping"]    # prefer SSH for router liveness + ping for reachability
 
   digital:
     router:
@@ -36,3 +51,30 @@ devices:
       ip: 192.168.254.10
       bind_ip: 192.168.10.242
       gns3_node_id: "68877ba5-c840-41da-ac14-19f148e111ec"
+
+monitor:
+  # how often proxy pings physical devices
+  check_interval_seconds: 10
+
+  # device up/down debounce (consecutive events)
+  device_fail_threshold: 3
+  device_recover_threshold: 3
+
+  # connection-level thresholds (device-side agents should already debounce by 3 pings;
+  # proxy-level thresholds protect against stray reports; set to 1 to act quickly)
+  connection_fail_threshold: 1
+  connection_recover_threshold: 1
+
+  # MQTT topic prefix used by device agents to report connection health:
+  # agents should publish to: <mqtt_prefix>/<source>/<target> e.g. "health/sensor/broker"
+  mqtt_prefix: "health"
+
+  # iptables chain used to block digital-side connections (proxy must run with privileges)
+  iptables_chain: "FORWARD"
+
+# Optional: place to define static MQTT broker credentials (if devices need them)
+mqtt:
+  host: 192.168.20.2
+  port: 1883
+  user: "admin"
+  password: "admin123"
