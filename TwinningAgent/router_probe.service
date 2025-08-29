@@ -1,0 +1,18 @@
+[Unit]
+Description=Router health probe (SSH bound to phys proxy IP)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/router_probe.py \
+  --host 192.168.10.1 \
+  --user cisco \
+  --password cisco123 \
+  --bind-ip 192.168.10.241 \
+  --peers '{"broker":{"ip":"192.168.20.2"}, "ipcam":{"ip":"192.168.254.3"}, "sensor":{"ip":"192.168.254.15"}}' \
+  --broker 192.168.20.2 \
+  --interval 10 --fail 3 --recover 3
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
