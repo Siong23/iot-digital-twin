@@ -54,7 +54,7 @@ class CameraProbe:
         self.interval = interval
         self.fail_th = fail_threshold
         self.recover_th = recover_threshold
-        self.mqtt = mqtt.Client("camera-probe")
+        self.mqtt = mqtt.Client(client_id="camera-probe", callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
         if mqtt_user and mqtt_pass:
             self.mqtt.username_pw_set(mqtt_user, mqtt_pass)
         self.mqtt.connect(mqtt_broker, 1883, 60)
