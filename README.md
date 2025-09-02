@@ -183,7 +183,7 @@ For detailed setup instructions and advanced usage, refer to:
 - [AttackThreat Framework Documentation](./AttackThreat/README.md)
 - [TSM-NIDS Documentation](./TSMixer/readme.md)
 - [MQTT Security Configuration Guide](https://medium.com/gravio-edge-iot-platform/how-to-set-up-a-mosquitto-mqtt-broker-securely-using-client-certificates-82b2aaaef9c8)
-- [Project Documentation (Word)](https://mmuedumy-my.sharepoint.com/:w:/g/personal/1221301354_student_mmu_edu_my/EWkIqwehnJFPv8hi3C9GOyoBzUNqNa3AnDoU8iBeZS4QEQ) *(Work in Progress - View Only)*
+- [Project Documentation (Word)](https://view.officeapps.live.com/op/view.aspx?src=https%3A%2F%2Fraw.githubusercontent.com%2FSiong23%2Fiot-digital-twin%2Frefs%2Fheads%2Fmain%2FTwinningAgent%2FIoT%2520Digital%2520Twin%2520Documentation%2520.docx&wdOrigin=BROWSELINK) *(Work in Progress - View Only)*
 
 ### Key Features by Component
 
