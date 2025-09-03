@@ -298,43 +298,71 @@ def _acl_has_line(src_ip: str, dst_ip: str) -> bool:
     out = _show_acl()
     if not out:
         return False
-    pattern = rf"deny +ip +host +{re.escape(src_ip)} +host +{re.escape(dst_ip)}"
-    return bool(re.search(pattern, out))
+    # robust regex: allow variable whitespace, optional sequence numbers
+    pattern = rf"deny\s+ip\s+host\s+{re.escape(src_ip)}\s+host\s+{re.escape(dst_ip)}"
+    return bool(re.search(pattern, out, flags=re.IGNORECASE))
 
 def add_block(src_ip: str, dst_ip: str):
     """
-    Add deny ip host <src> host <dst> into the router ACL (if missing).
-    Also updates in-memory conn_blocked state.
+    Ensure ACL contains deny A->B and deny B->A (bidirectional block).
+    Update conn_blocked for both directions.
     """
     try:
-        if _acl_has_line(src_ip, dst_ip):
-            logging.info("ACL already contains block %s -> %s", src_ip, dst_ip)
-            return
-        cmds = [
-            f"ip access-list extended {ROUTER_ACL_NAME}",
-            f"deny ip host {src_ip} host {dst_ip}"
-        ]
-        _router_ssh_run(cmds)
-        logging.info("Added router ACL block %s -> %s", src_ip, dst_ip)
+        need_cmds = []
+        # add forward if missing
+        if not _acl_has_line(src_ip, dst_ip):
+            need_cmds.append(f"ip access-list extended {ROUTER_ACL_NAME}")
+            need_cmds.append(f"deny ip host {src_ip} host {dst_ip}")
+        # add reverse if missing
+        if not _acl_has_line(dst_ip, src_ip):
+            # ensure ACL context only once
+            if not need_cmds:
+                need_cmds.append(f"ip access-list extended {ROUTER_ACL_NAME}")
+            need_cmds.append(f"deny ip host {dst_ip} host {src_ip}")
+
+        if need_cmds:
+            _router_ssh_run(need_cmds)
+            logging.info("Added router ACL block %s <-> %s", src_ip, dst_ip)
+        else:
+            logging.info("Router ACL already contains bidir block %s <-> %s", src_ip, dst_ip)
+
+        # record both directions as blocked in memory
+        # (use device names mapping outside; here we mark by IP tuple)
+        conn_blocked[(src_ip, dst_ip)] = True
+        conn_blocked[(dst_ip, src_ip)] = True
+
     except Exception as e:
-        logging.exception("Failed to add router ACL block %s -> %s: %s", src_ip, dst_ip, e)
+        logging.exception("Failed to add router ACL block %s <-> %s: %s", src_ip, dst_ip, e)
+
 
 def remove_block(src_ip: str, dst_ip: str):
     """
-    Remove deny ip host <src> host <dst> from the router ACL (if present).
+    Remove deny A->B and deny B->A from the ACL (if present).
+    Clear conn_blocked for both directions in memory.
     """
     try:
-        if not _acl_has_line(src_ip, dst_ip):
-            logging.info("ACL does not contain block %s -> %s", src_ip, dst_ip)
-            return
-        cmds = [
-            f"ip access-list extended {ROUTER_ACL_NAME}",
-            f"no deny ip host {src_ip} host {dst_ip}"
-        ]
-        _router_ssh_run(cmds)
-        logging.info("Removed router ACL block %s -> %s", src_ip, dst_ip)
+        cmds = []
+        if _acl_has_line(src_ip, dst_ip):
+            cmds.append(f"ip access-list extended {ROUTER_ACL_NAME}")
+            cmds.append(f"no deny ip host {src_ip} host {dst_ip}")
+        if _acl_has_line(dst_ip, src_ip):
+            if not cmds:
+                cmds.append(f"ip access-list extended {ROUTER_ACL_NAME}")
+            cmds.append(f"no deny ip host {dst_ip} host {src_ip}")
+
+        if cmds:
+            _router_ssh_run(cmds)
+            logging.info("Removed router ACL block %s <-> %s", src_ip, dst_ip)
+        else:
+            logging.info("Router ACL had no block entries for %s <-> %s", src_ip, dst_ip)
+
+        # clear memory state both directions
+        conn_blocked[(src_ip, dst_ip)] = False
+        conn_blocked[(dst_ip, src_ip)] = False
+
     except Exception as e:
-        logging.exception("Failed to remove router ACL block %s -> %s: %s", src_ip, dst_ip, e)
+        logging.exception("Failed to remove router ACL block %s <-> %s: %s", src_ip, dst_ip, e)
+
 
 # ---------------- MQTT handling for device reports ----------------
 def on_mqtt_connect(client, userdata, flags, rc):
