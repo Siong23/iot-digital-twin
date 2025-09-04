@@ -102,6 +102,10 @@ mqtt_client: Optional[mqtt.Client] = None
 # runtime flag
 _running = True
 
+# small per-pair backoff to avoid continuous retries when something is wrong
+_block_attempt_time = {}   # key=(src_ip,dst_ip) -> epoch of last attempt
+_BLOCK_RETRY_SECONDS = 10  # wait this long before retrying a failing add/remove for same pair
+
 # ---------------- UTILITIES ----------------
 def now_iso():
     from datetime import datetime
@@ -216,8 +220,8 @@ def _open_bound_transport(host: str, username: str, password: str, bind_ip: Opti
 
 def _exec_command_on_host(host: str, username: str, password: str, cmd: str, bind_ip: Optional[str] = None, timeout: int = 15) -> Tuple[int, str, str]:
     """
-    Execute single command on remote host using bound transport.
-    Returns (exit_status, stdout, stderr).
+    Execute single command on remote host. Returns (exit_code, stdout, stderr).
+    (Unchanged from prior implementation; ensure this one exists exactly.)
     """
     transport = None
     chan = None
@@ -261,16 +265,14 @@ def _exec_command_on_host(host: str, username: str, password: str, cmd: str, bin
 
 def _run_sudo_cmd(host: str, user: str, password: str, cmd: str, bind_ip: Optional[str] = None) -> Tuple[bool, str, str]:
     """
-    Attempt to run `cmd` under sudo on the remote host.
-    First try `sudo -n` (no password). If that fails, fallback to 'echo <pwd> | sudo -S -p "" <cmd>'.
+    Run cmd under sudo on remote host.
     Returns (success_bool, stdout, stderr).
     """
-    # try no-password sudo
-    test_cmd = f"sudo -n {cmd}"
-    rc, out, err = _exec_command_on_host(host, user, password, test_cmd, bind_ip=bind_ip, timeout=6)
+    # try sudo -n first (no password)
+    rc, out, err = _exec_command_on_host(host, user, password, f"sudo -n {cmd}", bind_ip=bind_ip, timeout=6)
     if rc == 0:
         return True, out, err
-    # fallback
+    # fallback: provide password via stdin to sudo -S
     safe_pwd = password.replace("'", "'\"'\"'")
     echo_cmd = f"echo '{safe_pwd}' | sudo -S -p '' {cmd}"
     rc2, out2, err2 = _exec_command_on_host(host, user, password, echo_cmd, bind_ip=bind_ip, timeout=10)
@@ -357,115 +359,130 @@ def _find_digital_device_by_ip(ip: str) -> Tuple[Optional[str], Optional[dict]]:
 # ---------------- Enforcement (block/unblock) ----------------
 def add_block(src_ip: str, dst_ip: str):
     """
-    Enforce a digital-side block between src_ip and dst_ip.
-      - If either side is digital router -> use router Null0 route
-      - Else SSH into VM(s) and add sudo iptables rule on OUTPUT to reject destination
-      - Apply symmetric block if possible (both VM OUTPUTs)
+    Add a block between src_ip and dst_ip on the digital side.
+    - For router involvement, use Null0 route.
+    - Otherwise, add iptables -A OUTPUT -d <dst_ip> -j REJECT on the VM(s).
     """
+    now = time.time()
+    key = (src_ip, dst_ip)
+    last = _block_attempt_time.get(key, 0)
+    if now - last < _BLOCK_RETRY_SECONDS:
+        logging.debug("Skipping add_block for %s->%s due to backoff", src_ip, dst_ip)
+        return
+    _block_attempt_time[key] = now
+
     src_name, src_info = _find_digital_device_by_ip(src_ip)
     dst_name, dst_info = _find_digital_device_by_ip(dst_ip)
 
-    # ROUTER case
+    # Router case: Null0 route on digital router
     if src_name == "router" or dst_name == "router":
-        # target IP is the remote endpoint to null-route
         target_ip = dst_ip if src_name == "router" else src_ip
-        logging.info("Adding Null0 route on digital router for %s", target_ip)
         try:
+            logging.info("Adding Null0 route for %s on digital router", target_ip)
             _router_ssh_run([f"ip route {target_ip} 255.255.255.255 Null0"])
-            conn_blocked[(src_name or src_ip, dst_name or dst_ip)] = True
+            conn_blocked[(src_ip, dst_ip)] = True
+            conn_blocked[(dst_ip, src_ip)] = True
         except Exception as e:
-            logging.exception("Failed to add Null0 route for %s: %s", target_ip, e)
+            logging.exception("Failed to add Null0 for %s: %s", target_ip, e)
         return
 
-    # VM case: add iptables OUTPUT -d dst_ip -j REJECT on src VM
+    # VM case: add rule on src VM
+    added_any = False
+
     if src_info and src_info.get("ssh_user") and src_info.get("ssh_password"):
-        host = src_info["ip"]
-        user = src_info["ssh_user"]
-        pwd = src_info["ssh_password"]
-        bind_ip = src_info.get("bind_ip")
-        # check if rule exists (no-password sudo check)
-        check_cmd = f"iptables -C OUTPUT -d {dst_ip} -j REJECT"
-        rc, out, err = _exec_command_on_host(host, user, pwd, f"sudo -n {check_cmd}", bind_ip=bind_ip, timeout=6)
-        if rc == 0:
-            logging.info("iptables rule already present on %s -> %s", host, dst_ip)
+        host = src_info["ip"]; user = src_info["ssh_user"]; pwd = src_info["ssh_password"]; bind_ip = src_info.get("bind_ip")
+        # check if rule exists using iptables -C
+        _, _, _ = (None, None, None)
+        rc_check, out_check, err_check = _exec_command_on_host(host, user, pwd, f"sudo -n iptables -C OUTPUT -d {dst_ip} -j REJECT", bind_ip=bind_ip, timeout=6)
+        if rc_check == 0:
+            logging.info("Rule already present on %s -> %s", host, dst_ip)
+            added_any = True
         else:
-            ok, o, e = _run_sudo_cmd(host, user, pwd, check_cmd, bind_ip=bind_ip)
+            # append rule
+            ok, o, e = _run_sudo_cmd(host, user, pwd, f"iptables -A OUTPUT -d {dst_ip} -j REJECT", bind_ip=bind_ip)
             if ok:
                 logging.info("Added iptables REJECT on %s -> %s", host, dst_ip)
+                added_any = True
             else:
-                logging.warning("Failed to add iptables on %s -> %s: %s / %s", host, dst_ip, o, e)
+                logging.warning("Failed to add iptables on %s -> %s: out=%s err=%s", host, dst_ip, o, e)
 
-    # symmetric on dst
+    # symmetric on dst VM
     if dst_info and dst_info.get("ssh_user") and dst_info.get("ssh_password"):
-        host = dst_info["ip"]
-        user = dst_info["ssh_user"]
-        pwd = dst_info["ssh_password"]
-        bind_ip = dst_info.get("bind_ip")
-        check_cmd = f"iptables -C OUTPUT -d {src_ip} -j REJECT"
-        rc, out, err = _exec_command_on_host(host, user, pwd, f"sudo -n {check_cmd}", bind_ip=bind_ip, timeout=6)
-        if rc == 0:
-            logging.info("iptables rule already present on %s -> %s", host, src_ip)
+        host = dst_info["ip"]; user = dst_info["ssh_user"]; pwd = dst_info["ssh_password"]; bind_ip = dst_info.get("bind_ip")
+        rc_check, out_check, err_check = _exec_command_on_host(host, user, pwd, f"sudo -n iptables -C OUTPUT -d {src_ip} -j REJECT", bind_ip=bind_ip, timeout=6)
+        if rc_check == 0:
+            logging.info("Rule already present on %s -> %s", host, src_ip)
+            added_any = True
         else:
-            ok, o, e = _run_sudo_cmd(host, user, pwd, check_cmd, bind_ip=bind_ip)
+            ok, o, e = _run_sudo_cmd(host, user, pwd, f"iptables -A OUTPUT -d {src_ip} -j REJECT", bind_ip=bind_ip)
             if ok:
                 logging.info("Added symmetric iptables REJECT on %s -> %s", host, src_ip)
+                added_any = True
             else:
-                logging.warning("Failed to add symmetric iptables on %s -> %s: %s / %s", host, src_ip, o, e)
+                logging.warning("Failed to add symmetric iptables on %s -> %s: out=%s err=%s", host, src_ip, o, e)
 
-    # mark blocked
-    conn_blocked[(src_ip, dst_ip)] = True
-    conn_blocked[(dst_ip, src_ip)] = True
+    # mark blocked only if at least one add succeeded (or was already present)
+    if added_any:
+        conn_blocked[(src_ip, dst_ip)] = True
+        conn_blocked[(dst_ip, src_ip)] = True
+    else:
+        logging.warning("No iptables rules added for %s<->%s; will retry after backoff", src_ip, dst_ip)
 
 def remove_block(src_ip: str, dst_ip: str):
     """
-    Remove enforced block between src_ip and dst_ip.
-    - Remove iptables rules on VMs if present
-    - Remove Null0 route on router if present
+    Remove previously created block. Remove only if we can.
     """
+    now = time.time()
+    key = (src_ip, dst_ip)
+    last = _block_attempt_time.get(key, 0)
+    if now - last < _BLOCK_RETRY_SECONDS:
+        logging.debug("Skipping remove_block for %s->%s due to backoff", src_ip, dst_ip)
+        return
+    _block_attempt_time[key] = now
+
     src_name, src_info = _find_digital_device_by_ip(src_ip)
     dst_name, dst_info = _find_digital_device_by_ip(dst_ip)
 
+    # Router case: remove Null0 route
     if src_name == "router" or dst_name == "router":
         target_ip = dst_ip if src_name == "router" else src_ip
-        logging.info("Removing Null0 route on digital router for %s", target_ip)
         try:
+            logging.info("Removing Null0 route for %s on digital router", target_ip)
             _router_ssh_run([f"no ip route {target_ip} 255.255.255.255 Null0"])
-            conn_blocked.pop((src_name or src_ip, dst_name or dst_ip), None)
+            conn_blocked.pop((src_ip, dst_ip), None)
+            conn_blocked.pop((dst_ip, src_ip), None)
         except Exception as e:
-            logging.exception("Failed to remove Null0 route for %s: %s", target_ip, e)
+            logging.exception("Failed to remove Null0 for %s: %s", target_ip, e)
         return
 
-    # remove rule on src
+    removed_any = False
+
     if src_info and src_info.get("ssh_user") and src_info.get("ssh_password"):
-        host = src_info["ip"]
-        user = src_info["ssh_user"]
-        pwd = src_info["ssh_password"]
-        bind_ip = src_info.get("bind_ip")
-        rm_cmd = f"iptables -D OUTPUT -d {dst_ip} -j REJECT"
-        ok, out, err = _run_sudo_cmd(host, user, pwd, rm_cmd, bind_ip=bind_ip)
+        host = src_info["ip"]; user = src_info["ssh_user"]; pwd = src_info["ssh_password"]; bind_ip = src_info.get("bind_ip")
+        ok, o, e = _run_sudo_cmd(host, user, pwd, f"iptables -D OUTPUT -d {dst_ip} -j REJECT", bind_ip=bind_ip)
         if ok:
             logging.info("Removed iptables REJECT on %s -> %s", host, dst_ip)
+            removed_any = True
         else:
-            logging.info("No iptables rule removed (or failed) on %s -> %s: %s", host, dst_ip, err)
+            logging.info("No iptables rule removed (or failed) on %s -> %s: %s", host, dst_ip, e)
 
-    # remove symmetric on dst
     if dst_info and dst_info.get("ssh_user") and dst_info.get("ssh_password"):
-        host = dst_info["ip"]
-        user = dst_info["ssh_user"]
-        pwd = dst_info["ssh_password"]
-        bind_ip = dst_info.get("bind_ip")
-        rm_cmd = f"iptables -D OUTPUT -d {src_ip} -j REJECT"
-        ok, out, err = _run_sudo_cmd(host, user, pwd, rm_cmd, bind_ip=bind_ip)
+        host = dst_info["ip"]; user = dst_info["ssh_user"]; pwd = dst_info["ssh_password"]; bind_ip = dst_info.get("bind_ip")
+        ok, o, e = _run_sudo_cmd(host, user, pwd, f"iptables -D OUTPUT -d {src_ip} -j REJECT", bind_ip=bind_ip)
         if ok:
             logging.info("Removed symmetric iptables REJECT on %s -> %s", host, src_ip)
+            removed_any = True
         else:
-            logging.info("No symmetric iptables rule removed (or failed) on %s -> %s: %s", host, src_ip, err)
+            logging.info("No symmetric iptables rule removed (or failed) on %s -> %s: %s", host, src_ip, e)
 
-    conn_blocked.pop((src_ip, dst_ip), None)
-    conn_blocked.pop((dst_ip, src_ip), None)
+    if removed_any:
+        conn_blocked.pop((src_ip, dst_ip), None)
+        conn_blocked.pop((dst_ip, src_ip), None)
+    else:
+        logging.debug("No iptables removals performed for %s<->%s", src_ip, dst_ip)
 
 # ---------------- MQTT handlers ----------------
-def on_mqtt_connect(client, userdata, flags, rc):
+def on_mqtt_connect(client, userdata, flags, rc, properties=None):
     logging.info("Connected to MQTT broker (rc=%s). Subscribing to health/#", rc)
     prefix = cfg.get("monitor", {}).get("mqtt_prefix", "health")
     client.subscribe(f"{prefix}/#")
@@ -641,7 +658,7 @@ def start_mqtt_listener():
     global mqtt_client
     broker_ip = cfg.get("mqtt", {}).get("host") or cfg["devices"]["physical"]["broker"]["ip"]
     broker_port = int(cfg.get("mqtt", {}).get("port", 1883))
-    mqtt_client = mqtt.Client(MQTT_CLIENT_ID)
+    mqtt_client = mqtt.Client(client_id=MQTT_CLIENT_ID, callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     mqtt_client.on_connect = on_mqtt_connect
     mqtt_client.on_message = on_mqtt_message
     try:
