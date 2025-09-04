@@ -9,6 +9,13 @@ gns3:
   user: "admin"
   password: "Password"
   project_id: "81600c14-839b-4a47-bca6-8bc92cdd5357"
+  
+router:
+  user: "admin"
+  password: "mmuzte123"
+  enable_password: "mmuzte123"
+  acl_name: "BLOCKED"
+  write_memory: false 
 
 devices:
   physical:
@@ -43,27 +50,31 @@ devices:
       ip: 192.168.20.2
       bind_ip: 192.168.10.242
       gns3_node_id: "47d56000-71db-4c11-9e40-3b7df1919cbb"
+      ssh_user: "server"
+      ssh_password: "admin"
     ipcam:
-      ip: 192.168.254.11
+      ip: 192.168.254.3
       bind_ip: 192.168.10.242
       gns3_node_id: "830a8cc2-2ce6-48eb-8ea0-a057fc4279d8"
     sensor:
-      ip: 192.168.254.10
+      ip: 192.168.254.15
       bind_ip: 192.168.10.242
       gns3_node_id: "68877ba5-c840-41da-ac14-19f148e111ec"
+      ssh_user: "temphumidadmin"
+      ssh_password: "admin"
 
 monitor:
   # how often proxy pings physical devices
   check_interval_seconds: 10
 
   # device up/down debounce (consecutive events)
-  device_fail_threshold: 3
-  device_recover_threshold: 3
+  device_fail_threshold: 1
+  device_recover_threshold: 1
 
   # connection-level thresholds (device-side agents should already debounce by 3 pings;
   # proxy-level thresholds protect against stray reports; set to 1 to act quickly)
-  connection_fail_threshold: 1
-  connection_recover_threshold: 1
+  connection_fail_threshold: 3
+  connection_recover_threshold: 3
 
   # MQTT topic prefix used by device agents to report connection health:
   # agents should publish to: <mqtt_prefix>/<source>/<target> e.g. "health/sensor/broker"
