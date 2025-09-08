@@ -489,7 +489,7 @@ def start_mqtt(config, devices_digi, conn_states, lock):
         "devices_digi": devices_digi,
         "conn_states": conn_states,
         "lock": lock
-    })
+    }， callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     if broker_user:
         client.username_pw_set(broker_user, broker_pass)
     client.on_message = on_message
