@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-router_probe.py
+router_probe.py / digi_router_probe.py
 Persistent SSH-based router probe (bind to proxy IP).
 Publishes <prefix>/router/<target>
 Requires: paramiko, paho-mqtt
