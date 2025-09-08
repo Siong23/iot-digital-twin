@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
 """
-camera_probe.py / digi_camera_probe.py
+camera_probe.py 
 Check camera ping + RTSP and publish <prefix>/ipcam/<check>
 
-Usage examples:
-  # physical camera probe from proxy, use physical bind address
-  python3 camera_probe.py --ip 192.168.254.3 --rtsp rtsp://192.168.254.3:8554/live \
-      --broker 192.168.20.2 --bind-ip 192.168.10.241 --prefix health
-
-  # digital camera probe from proxy, use digital bind address
-  python3 camera_probe.py --ip 192.168.254.11 --rtsp rtsp://192.168.254.11:8554/live \
-      --broker 192.168.20.2 --bind-ip 192.168.10.242 --prefix digi/health
 """
 
 import time, json, argparse, logging, subprocess
@@ -76,7 +68,7 @@ class CameraProbe:
         self.prefix = prefix.rstrip("/")
         self.bind_ip = bind_ip
 
-        self.mqtt = mqtt.Client(client_id=f"camera-probe-{self.cam_ip}", protocol=mqtt.MQTTv311, callback_api_version=CallbackAPIVersion.VERSION2)
+        self.mqtt = mqtt.Client(client_id=f"camera-probe-{self.cam_ip}", protocol=mqtt.MQTTv311)
         if mqtt_user and mqtt_pass:
             self.mqtt.username_pw_set(mqtt_user, mqtt_pass)
         try:
