@@ -1,0 +1,12 @@
+[Unit]
+Description=Broker health agent
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/bin/broker_agent.py --name broker   --peers '{"sensor":{"ip":"192.168.254.15","check_mqtt":true},"ipcam":{"ip":"192.168.254.3"}}'   --broker 192.168.20.2 --interval 10 --fail 3 --recover 3 --mqtt-topic sensors/physical/data
+Restart=always
+User=root
+Environment="PATH=/usr/bin:/bin"
+
+[Install]
+WantedBy=multi-user.target
