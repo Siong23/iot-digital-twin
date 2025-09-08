@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
-camera_probe.py
-Run on proxy (or broker) to check camera reachability.
-- Ping the camera IP
-- Test RTSP by attempting to open the stream using ffprobe or OpenCV (try ffprobe first)
-- Publishes health/ipcam/<target> and health/proxy/ipcam messages
+camera_probe.py / digi_camera_probe.py
+Check camera ping + RTSP and publish <prefix>/ipcam/<check>
 """
 
 import time, json, argparse, logging, subprocess
@@ -22,19 +19,17 @@ def ping_once(ip, timeout=2):
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 def ffprobe_check(rtsp_url, timeout=5):
-    # use ffprobe if available
     try:
-        cmd = ["ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-t", str(timeout), "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", rtsp_url]
+        cmd = ["ffprobe", "-v", "error", "-rtsp_transport", "tcp", "-t", str(timeout),
+               "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", rtsp_url]
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout+2)
         return r.returncode == 0 and (r.stdout and r.stdout.strip())
     except Exception:
         return False
 
 def check_rtsp(rtsp_url):
-    # try ffprobe first
     if ffprobe_check(rtsp_url):
         return True
-    # fallback: try OpenCV if installed
     try:
         import cv2
         cap = cv2.VideoCapture(rtsp_url)
@@ -47,14 +42,16 @@ def check_rtsp(rtsp_url):
 
 class CameraProbe:
     def __init__(self, cam_ip, rtsp_url, mqtt_broker, mqtt_user=None, mqtt_pass=None,
-                 interval=10, fail_threshold=3, recover_threshold=3):
+                 interval=10, fail_threshold=3, recover_threshold=3, prefix="health"):
         self.cam_ip = cam_ip
         self.rtsp_url = rtsp_url
         self.mqtt_broker = mqtt_broker
         self.interval = interval
         self.fail_th = fail_threshold
         self.recover_th = recover_threshold
-        self.mqtt = mqtt.Client(client_id="camera-probe", callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+        self.prefix = prefix.rstrip("/")
+
+        self.mqtt = mqtt.Client(client_id="camera-probe", protocol=mqtt.MQTTv311)
         if mqtt_user and mqtt_pass:
             self.mqtt.username_pw_set(mqtt_user, mqtt_pass)
         self.mqtt.connect(mqtt_broker, 1883, 60)
@@ -66,11 +63,12 @@ class CameraProbe:
         self.ping_state = True
         self.rtsp_state = True
 
-    def publish(self, topic, state):
+    def publish(self, suffix, state):
+        topic = f"{self.prefix}/ipcam/{suffix}"
         payload = json.dumps({"status": state, "time": now_iso()})
         try:
             self.mqtt.publish(topic, payload)
-            logging.info("Published %s = %s", topic, state)
+            logging.info("Published %s = %s", topic, payload)
         except Exception as e:
             logging.exception("Publish failed: %s", e)
 
@@ -89,10 +87,10 @@ class CameraProbe:
         prev_ping = self.ping_state
         if self.fail_count_ping >= self.fail_th and prev_ping:
             self.ping_state = False
-            self.publish(f"health/ipcam/ping", "DOWN")
+            self.publish("ping", "DOWN")
         if self.success_count_ping >= self.recover_th and not prev_ping:
             self.ping_state = True
-            self.publish(f"health/ipcam/ping", "UP")
+            self.publish("ping", "UP")
 
         # rtsp
         if rtsp_ok:
@@ -105,13 +103,13 @@ class CameraProbe:
         prev_rtsp = self.rtsp_state
         if self.fail_count_rtsp >= self.fail_th and prev_rtsp:
             self.rtsp_state = False
-            self.publish(f"health/ipcam/rtsp", "DOWN")
+            self.publish("rtsp", "DOWN")
         if self.success_count_rtsp >= self.recover_th and not prev_rtsp:
             self.rtsp_state = True
-            self.publish(f"health/ipcam/rtsp", "UP")
+            self.publish("rtsp", "UP")
 
     def run_forever(self):
-        logging.info("Camera probe started for %s (rtsp=%s)", self.cam_ip, self.rtsp_url)
+        logging.info("Camera probe started for %s (rtsp=%s) prefix=%s", self.cam_ip, self.rtsp_url, self.prefix)
         while True:
             try:
                 self.step()
@@ -127,7 +125,8 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=int, default=10)
     parser.add_argument("--fail", type=int, default=3)
     parser.add_argument("--recover", type=int, default=3)
+    parser.add_argument("--prefix", default="health", help="topic prefix, e.g. health or digi/health")
     args = parser.parse_args()
 
-    cp = CameraProbe(args.ip, args.rtsp, args.broker, interval=args.interval, fail_threshold=args.fail, recover_threshold=args.recover)
+    cp = CameraProbe(args.ip, args.rtsp, args.broker, interval=args.interval, fail_threshold=args.fail, recover_threshold=args.recover, prefix=args.prefix)
     cp.run_forever()
