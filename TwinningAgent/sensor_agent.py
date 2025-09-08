@@ -1,27 +1,19 @@
 #!/usr/bin/env python3
 """
 sensor_agent.py
-Run on the physical sensor (Raspberry Pi).
-- Pings configured peers (broker, router).
-- Optionally verifies MQTT publish (subscribe briefly) if `check_mqtt_topic` set.
-- Publishes to MQTT topics: health/<source>/<target>
-- Debounce: fail_threshold / recover_threshold (defaults 3)
+Pings peers, optionally checks MQTT, publishes <prefix>/<sensor>/<target>
 """
 
-import time, json, argparse, logging, socket, subprocess
+import time, json, argparse, logging, subprocess
 from datetime import datetime
 import paho.mqtt.client as mqtt
 
-# ---- Defaults ----
 DEFAULT_BROKER = "192.168.20.2"
 DEFAULT_INTERVAL = 10
 DEFAULT_FAIL_THRESHOLD = 3
 DEFAULT_RECOVER_THRESHOLD = 3
 LOGFILE = "/var/log/sensor_agent.log"
-
-# ---- Logging ----
-logging.basicConfig(filename=LOGFILE, level=logging.INFO,
-                    format="%(asctime)s %(levelname)s: %(message)s")
+logging.basicConfig(filename=LOGFILE, level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 def ping_once(dest, bind_ip=None, timeout=2):
     cmd = ["ping", "-c", "1", "-W", str(timeout)]
@@ -37,9 +29,9 @@ class HealthAgent:
     def __init__(self, name, peers, mqtt_broker, mqtt_user=None, mqtt_pass=None,
                  bind_ip=None, interval=DEFAULT_INTERVAL,
                  fail_threshold=DEFAULT_FAIL_THRESHOLD, recover_threshold=DEFAULT_RECOVER_THRESHOLD,
-                 check_mqtt_topic=None):
+                 check_mqtt_topic=None, prefix="health"):
         self.name = name
-        self.peers = peers  # dict: target_name -> dict(ip=..., check_mqtt=bool)
+        self.peers = peers
         self.mqtt_broker = mqtt_broker
         self.mqtt_user = mqtt_user
         self.mqtt_pass = mqtt_pass
@@ -48,35 +40,33 @@ class HealthAgent:
         self.fail_th = fail_threshold
         self.recover_th = recover_threshold
         self.check_mqtt_topic = check_mqtt_topic
+        self.prefix = prefix.rstrip("/")
 
-        # counters and last status
         self.fail_counts = {k:0 for k in peers}
         self.success_counts = {k:0 for k in peers}
-        self.status = {k: True for k in peers}  # assume UP initially
+        self.status = {k: True for k in peers}
 
-        # mqtt client (used only for publishing)
-        self.mqtt = mqtt.Client(f"sensor-agent-{self.name}")
+        self.mqtt = mqtt.Client(client_id=f"sensor-agent-{self.name}", protocol=mqtt.MQTTv311)
         if mqtt_user and mqtt_pass:
             self.mqtt.username_pw_set(mqtt_user, mqtt_pass)
         self.mqtt.connect(self.mqtt_broker, 1883, 60)
         self.mqtt.loop_start()
 
     def publish(self, target, state):
-        topic = f"health/{self.name}/{target}"
+        topic = f"{self.prefix}/{self.name}/{target}"
         payload = json.dumps({"status": state, "time": now_iso()})
         try:
             self.mqtt.publish(topic, payload, qos=0, retain=False)
-            logging.info("Published %s -> %s = %s", self.name, target, state)
+            logging.info("Published %s = %s", topic, payload)
         except Exception as e:
             logging.exception("MQTT publish failed: %s", e)
 
     def optional_mqtt_check(self, topic, timeout_s=3):
-        """Quickly subscribe and wait for message on topic (non-blocking)"""
         received = {"ok": False}
-        client = mqtt.Client(f"sensor-agent-check-{self.name}")
+        client = mqtt.Client(client_id=f"sensor-agent-check-{self.name}", protocol=mqtt.MQTTv311)
         if self.mqtt_user and self.mqtt_pass:
             client.username_pw_set(self.mqtt_user, self.mqtt_pass)
-        def on_message(c, u, m):
+        def on_message(c, userdata, msg):
             try:
                 received["ok"] = True
             except:
@@ -106,10 +96,8 @@ class HealthAgent:
 
     def check_peer(self, target_name, target_info):
         ip = target_info.get("ip")
-        # first try ping from this device
         ok = ping_once(ip, bind_ip=self.bind_ip)
         if not ok and target_info.get("check_mqtt"):
-            # if mqtt check configured, attempt it
             topic = target_info.get("mqtt_probe_topic")
             if topic:
                 ok = self.optional_mqtt_check(topic, timeout_s=3) or ok
@@ -126,24 +114,21 @@ class HealthAgent:
                 self.fail_counts[target_name] += 1
 
             prev = self.status[target_name]
-            # evaluate DOWN
             if self.fail_counts[target_name] >= self.fail_th and prev:
                 self.status[target_name] = False
                 self.publish(target_name, "DOWN")
-            # evaluate UP
             if self.success_counts[target_name] >= self.recover_th and not prev:
                 self.status[target_name] = True
                 self.publish(target_name, "UP")
 
     def run_forever(self):
-        logging.info("Sensor agent %s started peers=%s", self.name, list(self.peers.keys()))
+        logging.info("Sensor agent %s started peers=%s prefix=%s", self.name, list(self.peers.keys()), self.prefix)
         while True:
             try:
                 self.step()
             except Exception as e:
                 logging.exception("Error in step: %s", e)
             time.sleep(self.interval)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -155,10 +140,12 @@ if __name__ == "__main__":
     parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
     parser.add_argument("--fail", type=int, default=DEFAULT_FAIL_THRESHOLD)
     parser.add_argument("--recover", type=int, default=DEFAULT_RECOVER_THRESHOLD)
+    parser.add_argument("--prefix", default="health", help="topic prefix, e.g. health or digi/health")
     args = parser.parse_args()
 
     peers = json.loads(args.peers)
-    agent = HealthAgent(args.name, peers, mqtt_broker=args.broker,
+    agent = HealthAgent(args.name, peers, mqtt_broker=args.broker, mqtt_user=None, mqtt_pass=None,
                         bind_ip=args.bind_ip, interval=args.interval,
-                        fail_threshold=args.fail, recover_threshold=args.recover)
+                        fail_threshold=args.fail, recover_threshold=args.recover,
+                        check_mqtt_topic=None, prefix=args.prefix)
     agent.run_forever()
