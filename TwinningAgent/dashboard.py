@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # dashboard.py
-# Full IoT Consumer dashboard: RTSP video + temperature (red) + humidity (yellow)
-# Hardened for long runs: MQTT auto-reconnect, clean shutdown, bounded buffers, video watchdog.
+# Full IoT Consumer dashboard with device status panel (non-blocking monitor thread).
 
 import os
 import sys
@@ -10,6 +9,7 @@ import time
 import psutil
 import paho.mqtt.client as mqtt
 import cv2
+import subprocess
 from datetime import datetime, timedelta
 
 # -------- Optional: use software OpenGL to avoid GPU/driver issues on some boxes --------
@@ -52,6 +52,17 @@ HOVER_HIDE_SECONDS = 5.0
 # No-frame watchdog (video)
 NO_FRAME_TIMEOUT_S = 10
 
+# ---------------- Digital devices to show status for ----------------
+DIGITAL_DEVICES = {
+    "Router": "192.168.10.1",
+    "Broker": "192.168.20.2",
+    "Camera": "192.168.254.11",
+    "Sensor": "192.168.254.10"
+}
+
+# Monitor settings
+MONITOR_INTERVAL_S = 5.0  # how often to ping devices
+
 # -------------------- Data Buffers --------------------
 time_stamps = []
 temperature_values = []
@@ -64,11 +75,9 @@ mqtt_state = MqttState()
 
 def trim_buffers():
     """Enforce time-based (5 min) and count-based (MAX_POINTS) limits."""
-    # Time-based
     if len(time_stamps) > 1:
         while time_stamps and (time_stamps[-1] - time_stamps[0]).total_seconds() > HISTORY_SECONDS:
             time_stamps.pop(0); temperature_values.pop(0); humidity_values.pop(0)
-    # Count-based
     excess = len(time_stamps) - MAX_POINTS
     if excess > 0:
         del time_stamps[:excess]; del temperature_values[:excess]; del humidity_values[:excess]
@@ -80,19 +89,15 @@ def on_connect(client, userdata, flags, rc):
 
 def on_disconnect(client, userdata, rc):
     mqtt_state.connected = False
-    # paho will auto-reconnect because we use loop_start + reconnect_delay_set
 
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        # guard: tolerate timestamp with/without fractional seconds
         ts_raw = data.get("timestamp")
         if isinstance(ts_raw, str):
-            # fromisoformat handles "YYYY-mm-ddTHH:MM:SS[.ffffff]"
             timestamp = datetime.fromisoformat(ts_raw)
         else:
             timestamp = datetime.utcnow()
-
         temp = float(data["temperature"])
         hum = float(data["humidity"])
 
@@ -100,9 +105,61 @@ def on_message(client, userdata, msg):
         temperature_values.append(temp)
         humidity_values.append(hum)
         trim_buffers()
-
     except Exception as e:
         print("Error parsing MQTT message:", e)
+
+# -------------------- DeviceMonitor Thread --------------------
+class DeviceMonitor(QtCore.QThread):
+    """
+    Background thread that pings each device in DIGITAL_DEVICES periodically
+    and emits status updates as a dict: { "Router": True, "Broker": False, ... }
+    """
+    status_signal = QtCore.pyqtSignal(dict)
+
+    def __init__(self, devices: dict, interval_s: float = 5.0, parent=None):
+        super().__init__(parent)
+        self.devices = devices.copy()
+        self.interval = float(interval_s)
+        self._running = True
+
+    def run(self):
+        last_state = {name: None for name in self.devices.keys()}
+        # Initial quick check
+        while self._running:
+            state = {}
+            for name, ip in self.devices.items():
+                alive = self.ping(ip)
+                state[name] = alive
+            # Only emit if any change or emit every loop (we emit every loop for UI refresh)
+            self.status_signal.emit(state)
+            last_state = state
+            # sleep in small increments to allow quick stop
+            slept = 0.0
+            while self._running and slept < self.interval:
+                time.sleep(0.2)
+                slept += 0.2
+
+    def stop(self):
+        self._running = False
+        try:
+            self.wait(timeout=2000)
+        except Exception:
+            pass
+
+    @staticmethod
+    def ping(ip: str) -> bool:
+        """
+        Use system ping. Returns True if reachable.
+        Uses Linux `ping -c1 -W1`.
+        """
+        try:
+            res = subprocess.run(
+                ["ping", "-c", "1", "-W", "1", ip],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
 
 # -------------------- Video Thread --------------------
 class VideoThread(QtCore.QThread):
@@ -136,7 +193,6 @@ class VideoThread(QtCore.QThread):
 
                     self._last_frame_ts = time.time()
 
-                    # Convert BGR -> RGB
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     h, w, ch = rgb.shape
                     bytes_per_line = ch * w
@@ -144,7 +200,6 @@ class VideoThread(QtCore.QThread):
                     self.frame_received.emit(qt_image.copy())
                     self.status_changed.emit(True)
 
-                    # Watchdog: if no frame for too long, restart capture
                     if time.time() - self._last_frame_ts > NO_FRAME_TIMEOUT_S:
                         break
 
@@ -178,7 +233,6 @@ class VideoThread(QtCore.QThread):
 
 # -------------------- Custom Time Axis --------------------
 class TimeAxisItem(pg.AxisItem):
-    """X axis shows clock time HH:MM:SS"""
     def tickStrings(self, values, scale, spacing):
         return [datetime.fromtimestamp(v).strftime("%H:%M:%S") for v in values]
 
@@ -187,7 +241,7 @@ class Dashboard(QWidget):
     def __init__(self, mqtt_client):
         super().__init__()
         self.setWindowTitle("Digital Twin IoT Dashboard")
-        self.resize(1200, 720)
+        self.resize(1200, 760)
         self.mqtt_client = mqtt_client
 
         main_layout = QVBoxLayout(self)
@@ -257,9 +311,21 @@ class Dashboard(QWidget):
 
         top_h.addWidget(right_widget, stretch=5)
 
-        # bottom: overall status
+        # bottom: device status panel (grid/horizontal)
+        self.status_panel = QWidget()
+        self.status_layout = QHBoxLayout(self.status_panel)
+        self.status_labels = {}
+        # Create a label widget for each device
+        for name, ip in DIGITAL_DEVICES.items():
+            lbl = QLabel(f"{name} ({ip}): Checking...")
+            lbl.setStyleSheet("color: gray; font-weight: bold;")
+            self.status_layout.addWidget(lbl)
+            self.status_labels[name] = lbl
+        main_layout.addWidget(self.status_panel, stretch=1)
+
+        # small global status row
         self.status_label = QLabel("Initializing device statuses...")
-        main_layout.addWidget(self.status_label, stretch=1)
+        main_layout.addWidget(self.status_label, stretch=0)
 
         # Hover crosshairs and labels for temp
         self.vLine_temp = pg.InfiniteLine(angle=90, movable=False,
@@ -304,6 +370,11 @@ class Dashboard(QWidget):
         self.video_thread.start()
         self.stream_paused = False
 
+        # Device monitor thread
+        self.device_monitor = DeviceMonitor(DIGITAL_DEVICES, interval_s=MONITOR_INTERVAL_S)
+        self.device_monitor.status_signal.connect(self.on_device_status_update, QtCore.Qt.QueuedConnection)
+        self.device_monitor.start()
+
     def toggle_stream(self, checked):
         self.stream_paused = checked
         self.btn_toggle_stream.setText("Resume" if checked else "Pause")
@@ -316,7 +387,6 @@ class Dashboard(QWidget):
             pix = pix.scaled(self.video_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
             self.video_label.setPixmap(pix)
         except Exception:
-            # Ignore intermittent paint errors
             pass
 
     def on_stream_status(self, up: bool):
@@ -325,43 +395,54 @@ class Dashboard(QWidget):
             self.video_label.setText("Stream unavailable")
             self.video_label.setPixmap(QtGui.QPixmap())
 
-    def update_dashboard(self):
-        # MQTT/host status line
+    def on_device_status_update(self, status_dict):
+        """
+        Handler for device monitor updates.
+        status_dict: {"Router": True/False, "Broker": True/False, ...}
+        """
+        for name, alive in status_dict.items():
+            lbl = self.status_labels.get(name)
+            if not lbl:
+                continue
+            ip = DIGITAL_DEVICES.get(name, "unknown")
+            if alive:
+                lbl.setText(f"{name} ({ip}): UP ✅")
+                lbl.setStyleSheet("color: green; font-weight: bold;")
+            else:
+                lbl.setText(f"{name} ({ip}): DOWN ❌")
+                lbl.setStyleSheet("color: red; font-weight: bold;")
+        # update global status line too
+        mqtt_txt = "MQTT: UP" if mqtt_state.connected else "MQTT: DOWN (reconnecting)"
         cpu = psutil.cpu_percent(interval=0.05)
         ram = psutil.virtual_memory().percent
-        mqtt_txt = "MQTT: UP" if mqtt_state.connected else "MQTT: DOWN (reconnecting)"
-        self.status_label.setText(f"Router: UP | Broker: UP | Sensor: UP | {mqtt_txt}    CPU: {cpu}%   RAM: {ram}%")
+        self.status_label.setText(f"{mqtt_txt}    CPU: {cpu}%   RAM: {ram}%")
 
+    def update_dashboard(self):
+        # Update graphs and labels
         if not time_stamps:
             self.temp_latest_label.setText("Latest Temp: --")
             self.hum_latest_label.setText("Latest Humidity: --")
             return
 
         times_epoch = [t.timestamp() for t in time_stamps]
-
-        # update curves
         self.temp_curve.setData(times_epoch, temperature_values)
         self.hum_curve.setData(times_epoch, humidity_values)
 
-        # update newest-data labels
         newest_time = time_stamps[-1].strftime("%H:%M:%S")
         newest_temp = temperature_values[-1]
         newest_hum = humidity_values[-1]
         self.temp_latest_label.setText(f"Latest Temp: {newest_temp:.2f} °C    at {newest_time}")
         self.hum_latest_label.setText(f"Latest Humidity: {newest_hum:.2f}%    at {newest_time}")
 
-        # auto-scroll if not hovering
         now_ts = time.time()
         if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS and (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
             if times_epoch:
                 self.temp_plot.setXRange(times_epoch[-1] - HISTORY_SECONDS, times_epoch[-1])
                 self.hum_plot.setXRange(times_epoch[-1] - HISTORY_SECONDS, times_epoch[-1])
 
-        # auto-range Ys
         self.temp_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.hum_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
-        # hide crosshair if timeout
         if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS:
             self.vLine_temp.hide(); self.hLine_temp.hide(); self.label_temp.hide()
         if (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
@@ -406,9 +487,13 @@ class Dashboard(QWidget):
             self.label_hum.setPos(label_x, label_y); self.label_hum.show()
 
     def closeEvent(self, event):
-        # Stop video thread
+        # Stop video thread & device monitor
         try:
             self.video_thread.stop()
+        except Exception:
+            pass
+        try:
+            self.device_monitor.stop()
         except Exception:
             pass
         # Cleanly stop MQTT
@@ -430,7 +515,6 @@ def main():
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
-    # automatic reconnect backoff
     client.reconnect_delay_set(min_delay=1, max_delay=30)
     client.will_set("system/dashboard/status", payload="offline", qos=0, retain=False)
 
