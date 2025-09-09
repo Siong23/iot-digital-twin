@@ -2,7 +2,6 @@
 # dashboard.py
 # Full IoT Consumer dashboard with device status panel (2x2 grid).
 # Hardened for long runs: MQTT auto-reconnect, clean shutdown, bounded buffers, video watchdog.
-# Removed MQTT up/down and CPU/RAM display per request.
 
 import os
 import sys
