@@ -37,7 +37,7 @@ from PyQt5 import QtCore, QtGui
 import pyqtgraph as pg
 
 # ---------------- CONFIG ----------------
-STREAM_URL = "rtsp://192.168.20.2:8554/proxied"
+STREAM_URL = "rtsp://192.168.20.2:8554/ip_camera"
 MQTT_BROKER = "192.168.20.2"
 MQTT_USER = "admin"
 MQTT_PASS = "admin123"
@@ -59,8 +59,8 @@ NO_FRAME_TIMEOUT_S = 10
 DIGITAL_DEVICES = {
     "Router": "192.168.10.1",
     "Broker": "192.168.20.2",
-    "Camera": "192.168.254.11",
-    "Sensor": "192.168.254.10"
+    "Camera": "192.168.254.3",
+    "Sensor": "192.168.254.15"
 }
 
 # Monitor settings
