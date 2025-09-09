@@ -1,383 +1,389 @@
 #!/usr/bin/env python3
 """
-dashboard_grid.py
+dashboard.py
 
-2x2 IoT Dashboard:
- - Top-left: RTSP video (OpenCV -> Tkinter)
- - Top-right: Temperature (large)
- - Bottom-left: Humidity (large)
- - Bottom-right: Status/Log (scrollable) + small indicators
+RTSP video dashboard with a bottom 2x2 device status grid.
 
-Features:
- - MQTT subscriber with auto-reconnect
- - Thread-safe UI updates via queue
- - Video reader thread with watchdog / reconnect
- - Clean shutdown on window close / Ctrl-C
- - Bounded queues to avoid memory growth
+Usage:
+    python3 dashboard.py --rtsp rtsp://192.168.20.2:8554/proxied --mqtt-host 192.168.20.2
+
+Requirements:
+    pip install opencv-python paho-mqtt numpy
 """
 
-import tkinter as tk
-from tkinter.scrolledtext import ScrolledText
-from PIL import Image, ImageTk
-import cv2
-import threading
-import queue
-import time
-import json
+import argparse
 import logging
+import json
+import threading
+import time
+import queue
 import signal
-import sys
+from collections import defaultdict, deque
+from datetime import datetime
+import cv2
+import numpy as np
 import paho.mqtt.client as mqtt
 
-# -------- CONFIG (edit to match your env) ----------
-RTSP_URL = "rtsp://192.168.20.2:8554/proxied"  # example
-MQTT_HOST = "192.168.20.2"
-MQTT_PORT = 1883
-MQTT_USER = "admin"
-MQTT_PASS = "admin123"
-MQTT_TOPIC = "health/#"  # listens to health updates
-VIDEO_RECONNECT_SEC = 5
-VIDEO_WATCHDOG_THRESHOLD = 8.0  # seconds of no frames before reconnect
-FRAME_MAX_QUEUE = 2
-UI_UPDATE_INTERVAL_MS = 200  # how often UI pulls updates from queue
-WINDOW_TITLE = "IoT 2x2 Dashboard"
+# ---------------- CONFIG & ARGS ----------------
+DEFAULT_RTSP = "rtsp://192.168.20.2:8554/proxied"
+DEFAULT_MQTT_HOST = "192.168.20.2"
+DEFAULT_MQTT_PORT = 1883
+FRAME_QUEUE_MAX = 2  # bounded buffer
+VIDEO_WATCHDOG_TIMEOUT = 6.0  # seconds without new frame => restart capture
 
-# -------- LOGGING ----------
-logging.basicConfig(level=logging.INFO, filename="dashboard_grid.log",
-                    format="%(asctime)s [%(levelname)s] %(message)s")
+DEVICE_LIST = ["broker", "ipcam", "sensor", "router"]  # order for 2x2 grid
 
-# -------- THREAD-TO-UI QUEUES ----------
-ui_queue = queue.Queue(maxsize=256)     # events to UI (mqtt updates, logs)
-frame_queue = queue.Queue(maxsize=FRAME_MAX_QUEUE)  # latest video frames
+parser = argparse.ArgumentParser()
+parser.add_argument("--rtsp", default=DEFAULT_RTSP, help="RTSP URL for the camera")
+parser.add_argument("--mqtt-host", default=DEFAULT_MQTT_HOST, help="MQTT broker host")
+parser.add_argument("--mqtt-port", type=int, default=DEFAULT_MQTT_PORT, help="MQTT broker port")
+parser.add_argument("--mqtt-user", default=None, help="MQTT username (optional)")
+parser.add_argument("--mqtt-pass", default=None, help="MQTT password (optional)")
+parser.add_argument("--win-name", default="Dashboard", help="OpenCV window name")
+parser.add_argument("--scale", type=float, default=1.0, help="Scale display (0.5 = half size)")
+args = parser.parse_args()
 
-# -------- GLOBAL CONTROL ----------
-_stop_event = threading.Event()
+# ---------------- LOGGING ----------------
+logging.basicConfig(
+    filename="dashboard.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logging.getLogger().addHandler(logging.StreamHandler())  # also print to stdout
 
-# -------- MQTT HANDLER ----------
-def mqtt_on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        msg = f"MQTT connected to {MQTT_HOST}:{MQTT_PORT}"
-        logging.info(msg)
-        try:
-            client.subscribe(MQTT_TOPIC)
-            ui_queue.put_nowait(("log", msg))
-        except Exception as e:
-            logging.exception("Failed subscribe")
-            ui_queue.put_nowait(("log", f"MQTT subscribe error: {e}"))
-    else:
-        ui_queue.put_nowait(("log", f"MQTT connect failed rc={rc}"))
+# ---------------- GLOBAL STATE ----------------
+frame_q = queue.Queue(maxsize=FRAME_QUEUE_MAX)
+running = threading.Event()
+running.set()
 
-def mqtt_on_message(client, userdata, msg):
-    # Expecting topics like health/sensor/broker and JSON payload {"status":"DOWN"} or others.
-    try:
-        payload = msg.payload.decode(errors="ignore")
-        topic = msg.topic
-        data = None
-        try:
-            data = json.loads(payload)
-        except Exception:
-            data = payload
-        ui_queue.put_nowait(("mqtt", (topic, data)))
-    except queue.Full:
-        # drop if UI too slow
-        logging.warning("ui_queue is full, dropping mqtt message")
+last_frame_time = 0.0
+last_frame_lock = threading.Lock()
 
-def mqtt_thread():
-    client = mqtt.Client()
-    if MQTT_USER:
-        client.username_pw_set(MQTT_USER, MQTT_PASS)
-    client.on_connect = mqtt_on_connect
-    client.on_message = mqtt_on_message
+# statuses: dict -> {"status": "UP"/"DOWN"/"UNKNOWN", "ts": epoch}
+statuses = {}
+for d in DEVICE_LIST:
+    statuses[d] = {"status": "UNKNOWN", "ts": 0}
 
-    # auto-reconnect loop
-    while not _stop_event.is_set():
-        try:
-            client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
-            client.loop_start()
-            # run until disconnected or stop
-            while not _stop_event.is_set():
-                time.sleep(0.5)
-            client.loop_stop()
-            try:
-                client.disconnect()
-            except Exception:
-                pass
-            break
-        except Exception as e:
-            logging.exception("MQTT connect error")
-            ui_queue.put_nowait(("log", f"MQTT connect error: {e}"))
-            # wait and retry
-            for _ in range(10):
-                if _stop_event.is_set():
-                    break
-                time.sleep(1)
-    logging.info("MQTT thread exiting")
+# for optional telemetry (temp/humidity)
+telemetry = defaultdict(lambda: {"temp": None, "hum": None, "history": deque(maxlen=120)})
 
-# -------- VIDEO THREAD ----------
-def video_reader(rtsp_url):
-    """
-    Continuously attempts to read frames and put the latest into frame_queue.
-    Watchdog reconnect if no frames for VIDEO_WATCHDOG_THRESHOLD seconds.
-    """
+# ---------------- RTSP CAPTURE THREAD ----------------
+def rtsp_capture_loop(rtsp_url):
+    """Producer: capture frames from RTSP into a bounded queue."""
+    global last_frame_time
     cap = None
-    last_frame_ts = 0
-    while not _stop_event.is_set():
+    while running.is_set():
         try:
             if cap is None or not cap.isOpened():
                 logging.info("Opening video capture: %s", rtsp_url)
                 cap = cv2.VideoCapture(rtsp_url)
-                # small delay for some RTSP servers
-                time.sleep(0.5)
+                if not cap.isOpened():
+                    logging.warning("Unable to open RTSP stream; retrying in 2s")
+                    time.sleep(2)
+                    continue
+                # read one frame to ensure stream started
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    logging.warning("RTSP opened but no frame; retrying in 1s")
+                    time.sleep(1)
+                    continue
+                with last_frame_lock:
+                    last_frame_time = time.time()
+                # push initial frame
+                try:
+                    frame_q.put_nowait(frame)
+                except queue.Full:
+                    pass
 
+            # normal capture loop
             ret, frame = cap.read()
             if not ret or frame is None:
-                # no frame, maybe transient; check watchdog
-                if last_frame_ts and (time.time() - last_frame_ts) > VIDEO_WATCHDOG_THRESHOLD:
-                    logging.warning("Video watchdog triggered, reconnecting capture")
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
-                    cap = None
-                    last_frame_ts = 0
-                    time.sleep(VIDEO_RECONNECT_SEC)
-                else:
-                    time.sleep(0.1)
+                logging.warning("Frame read failed; closing and reopening capture")
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                cap = None
+                time.sleep(1)
                 continue
 
-            last_frame_ts = time.time()
-            # convert BGR -> RGB for PIL
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            # enqueue latest frame (drop older if full)
+            # put frame into bounded queue (drop oldest if full)
             try:
-                # keep only the latest frame by emptying the queue first if full
-                if frame_queue.full():
-                    try:
-                        frame_queue.get_nowait()
-                    except Exception:
-                        pass
-                frame_queue.put_nowait(frame_rgb)
+                frame_q.put(frame, timeout=0.2)
             except queue.Full:
-                pass
+                try:
+                    _ = frame_q.get_nowait()  # drop oldest
+                    frame_q.put_nowait(frame)
+                except Exception:
+                    pass
 
-            # small throttle
-            time.sleep(0.02)
+            with last_frame_lock:
+                last_frame_time = time.time()
+
         except Exception as e:
-            logging.exception("Video reader exception")
-            ui_queue.put_nowait(("log", f"Video reader error: {e}"))
+            logging.exception("RTSP capture exception: %s", e)
+            # try to close and reopen
             try:
                 if cap:
                     cap.release()
             except Exception:
                 pass
             cap = None
-            time.sleep(VIDEO_RECONNECT_SEC)
+            time.sleep(2)
+
     # cleanup
     try:
         if cap:
             cap.release()
     except Exception:
         pass
-    logging.info("Video thread exiting")
+    logging.info("RTSP capture loop exited")
 
-# -------- UI ----------
-class Dashboard(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title(WINDOW_TITLE)
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.create_widgets()
-        # state
-        self.temp_val = tk.StringVar(value="-- °C")
-        self.hum_val = tk.StringVar(value="-- %")
-        self.mqtt_status = tk.StringVar(value="MQTT: -")
-        self.video_image = None  # keep reference to avoid GC
-        # schedule UI update
-        self.after(UI_UPDATE_INTERVAL_MS, self.consume_queues)
+# ---------------- VIDEO WATCHDOG THREAD ----------------
+def video_watchdog(rtsp_url):
+    """Restart capture by clearing the queue if no frames arrive for a while."""
+    global last_frame_time
+    while running.is_set():
+        time.sleep(1.0)
+        with last_frame_lock:
+            t = last_frame_time
+        if t == 0:
+            continue
+        if time.time() - t > VIDEO_WATCHDOG_TIMEOUT:
+            logging.warning("Video watchdog: no frames for %.1fs -> clearing queue to force reopen", time.time() - t)
+            # empty queue to trigger capture thread to reopen
+            with frame_q.mutex:
+                frame_q.queue.clear()
+            # set last_frame_time to now so we don't spam
+            with last_frame_lock:
+                last_frame_time = time.time()
 
-    def create_widgets(self):
-        # use grid 2x2
-        # top-left: video frame
-        self.video_frame = tk.Frame(self, bd=2, relief=tk.SUNKEN, width=480, height=320)
-        self.video_frame.grid(row=0, column=0, padx=4, pady=4, sticky="nsew")
-        self.video_label = tk.Label(self.video_frame)
-        self.video_label.pack(expand=True, fill="both")
+# ---------------- MQTT HANDLERS ----------------
+def mqtt_on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        logging.info("MQTT connected to %s:%d", args.mqtt_host, args.mqtt_port)
+        prefix = userdata.get("mqtt_prefix", "health")
+        client.subscribe(f"{prefix}/#")
+    else:
+        logging.warning("MQTT connect failed rc=%s", rc)
 
-        # top-right: temperature big label
-        self.temp_frame = tk.Frame(self, bd=2, relief=tk.SUNKEN, width=240, height=160)
-        self.temp_frame.grid(row=0, column=1, padx=4, pady=4, sticky="nsew")
-        tk.Label(self.temp_frame, text="Temperature", font=("Helvetica", 12)).pack()
-        self.temp_display = tk.Label(self.temp_frame, textvariable=self.temp_val,
-                                     font=("Helvetica", 36), fg="red")
-        self.temp_display.pack(expand=True)
-
-        # bottom-left: humidity
-        self.hum_frame = tk.Frame(self, bd=2, relief=tk.SUNKEN, width=240, height=160)
-        self.hum_frame.grid(row=1, column=0, padx=4, pady=4, sticky="nsew")
-        tk.Label(self.hum_frame, text="Humidity", font=("Helvetica", 12)).pack()
-        self.hum_display = tk.Label(self.hum_frame, textvariable=self.hum_val,
-                                    font=("Helvetica", 36), fg="orange")
-        self.hum_display.pack(expand=True)
-
-        # bottom-right: status/log
-        self.log_frame = tk.Frame(self, bd=2, relief=tk.SUNKEN, width=240, height=160)
-        self.log_frame.grid(row=1, column=1, padx=4, pady=4, sticky="nsew")
-        tk.Label(self.log_frame, text="Status / Log", font=("Helvetica", 12)).pack()
-        self.log_text = ScrolledText(self.log_frame, height=8, state="disabled")
-        self.log_text.pack(expand=True, fill="both")
-
-        # make grid expand reasonably
-        self.grid_rowconfigure(0, weight=3)
-        self.grid_rowconfigure(1, weight=2)
-        self.grid_columnconfigure(0, weight=3)
-        self.grid_columnconfigure(1, weight=2)
-
-        # small bottom bar for indicators
-        self.indicator_frame = tk.Frame(self, bd=0)
-        self.indicator_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
-        tk.Label(self.indicator_frame, textvariable=self.mqtt_status).pack(side="left")
-
-    def consume_queues(self):
-        # pop frames and display the latest
-        try:
-            while True:
-                frame = frame_queue.get_nowait()
-                # convert to PIL Image and resize to video_label size
-                try:
-                    pil = Image.fromarray(frame)
-                    # get current label size (fallback to defaults)
-                    w = max(160, self.video_label.winfo_width() or 480)
-                    h = max(120, self.video_label.winfo_height() or 320)
-                    pil = pil.resize((w, h), Image.BILINEAR)
-                    self.video_image = ImageTk.PhotoImage(pil)
-                    self.video_label.config(image=self.video_image)
-                except Exception:
-                    logging.exception("Failed to render video frame")
-        except queue.Empty:
-            pass
-
-        # process UI events (mqtt/log)
-        processed = 0
-        while processed < 20:
-            try:
-                kind, payload = ui_queue.get_nowait()
-            except queue.Empty:
-                break
-            processed += 1
-            if kind == "log":
-                self.append_log(str(payload))
-            elif kind == "mqtt":
-                topic, data = payload
-                # very basic parsing: if topic includes 'temperature' or 'temp' update, likewise humidity
-                t = topic.lower()
-                if "temp" in t or ("sensor" in t and "temp" in json.dumps(data).lower()):
-                    # try extract numeric
-                    v = extract_numeric_from_payload(data)
-                    if v is not None:
-                        self.temp_val.set(f"{v} °C")
-                    self.append_log(f"{topic}: {data}")
-                elif "hum" in t or "humidity" in t or "sensor" in t:
-                    v = extract_numeric_from_payload(data)
-                    if v is not None:
-                        self.hum_val.set(f"{v} %")
-                    self.append_log(f"{topic}: {data}")
-                else:
-                    # generic health update
-                    self.append_log(f"{topic}: {data}")
-                # update mqtt status
-                self.mqtt_status.set(f"MQTT last: {topic}")
-
-        # reschedule
-        if not _stop_event.is_set():
-            self.after(UI_UPDATE_INTERVAL_MS, self.consume_queues)
-
-    def append_log(self, text):
-        timestamp = time.strftime("%H:%M:%S")
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", f"[{timestamp}] {text}\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-
-    def on_close(self):
-        logging.info("Shutdown requested by UI")
-        _stop_event.set()
-        # short delay to let threads exit gracefully
-        try:
-            self.after(200, self.destroy)
-        except Exception:
-            self.destroy()
-
-def extract_numeric_from_payload(payload):
-    """
-    Try to find a numeric value in JSON or string payloads.
-    """
+def mqtt_on_message(client, userdata, msg):
     try:
-        if isinstance(payload, dict):
-            for k in ("value", "temp", "temperature", "t"):
-                if k in payload:
-                    try:
-                        return float(payload[k])
-                    except Exception:
-                        pass
-            # fallback: search all values
-            for v in payload.values():
-                try:
-                    return float(v)
-                except Exception:
-                    pass
-        else:
-            # try parse simple JSON numeric or raw number
-            s = str(payload)
+        topic = msg.topic
+        # expected: health/<src>/<dst>
+        parts = topic.split("/")
+        if len(parts) >= 3 and parts[0] == userdata.get("mqtt_prefix", "health"):
+            _, src, dst = parts[:3]
             try:
-                j = json.loads(s)
-                if isinstance(j, (int, float)):
-                    return float(j)
-                if isinstance(j, dict):
-                    return extract_numeric_from_payload(j)
+                payload = msg.payload.decode("utf-8").strip()
+                obj = json.loads(payload) if payload else {}
             except Exception:
-                pass
-            # fallback: extract first number in text
-            import re
-            m = re.search(r"(-?\d+(\.\d+)?)", s)
-            if m:
-                return float(m.group(1))
+                obj = {}
+            status = obj.get("status", None)
+            if status is None:
+                # fallback: if payload is text "UP"/"DOWN"
+                txt = payload.upper() if isinstance(payload, str) else ""
+                if txt in ("UP", "DOWN"):
+                    status = txt
+            if status:
+                status_val = "UP" if status.upper() == "UP" else "DOWN"
+                if src in statuses:
+                    statuses[src]["status"] = status_val
+                    statuses[src]["ts"] = time.time()
+                    logging.info("MQTT: %s -> %s", src, status_val)
+                else:
+                    # maybe set for dst as well if not known
+                    if dst in statuses:
+                        statuses[dst]["status"] = status_val
+                        statuses[dst]["ts"] = time.time()
+                        logging.info("MQTT: %s -> %s (applied to dst %s)", src, status_val, dst)
+        else:
+            # optional telemetry topics such as telemetry/<device>/temp
+            parts = topic.split("/")
+            if len(parts) >= 3 and parts[0] in ("telemetry", "telemetery", "tele"):
+                _, device, metric = parts[:3]
+                try:
+                    val = float(msg.payload.decode("utf-8"))
+                except Exception:
+                    val = None
+                if device in telemetry:
+                    if metric in ("temp", "temperature"):
+                        telemetry[device]["temp"] = val
+                        telemetry[device]["history"].append(("temp", time.time(), val))
+                    elif metric in ("hum", "humidity"):
+                        telemetry[device]["hum"] = val
+                        telemetry[device]["history"].append(("hum", time.time(), val))
+    except Exception as e:
+        logging.exception("Error in mqtt_on_message: %s", e)
+
+def start_mqtt_client():
+    client = mqtt.Client(userdata={"mqtt_prefix": "health"})
+    if args.mqtt_user:
+        client.username_pw_set(args.mqtt_user, args.mqtt_pass or "")
+    client.on_connect = mqtt_on_connect
+    client.on_message = mqtt_on_message
+    try:
+        client.connect(args.mqtt_host, args.mqtt_port, keepalive=60)
+        client.loop_start()
+        return client
+    except Exception as e:
+        logging.exception("MQTT connect failed: %s", e)
+        return None
+
+# ---------------- RENDER / UI ----------------
+def draw_status_grid(img, devices, bottom_height_ratio=0.22):
+    """
+    Draw a 2x2 grid of device statuses at bottom of image.
+    devices: list of device names in order -> [0] top-left, [1] top-right, [2] bottom-left, [3] bottom-right
+    """
+    h, w = img.shape[:2]
+    bh = int(h * bottom_height_ratio)
+    grid_y0 = h - bh
+    # draw a semi-transparent background rectangle
+    overlay = img.copy()
+    cv2.rectangle(overlay, (0, grid_y0), (w, h), (10, 10, 10), -1)
+    alpha = 0.65
+    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+
+    # grid: 2 cols x 2 rows
+    cols = 2
+    rows = 2
+    cell_w = w // cols
+    cell_h = bh // rows
+
+    for idx, name in enumerate(devices):
+        col = idx % cols
+        row = idx // cols
+        x0 = col * cell_w
+        y0 = grid_y0 + row * cell_h
+        x1 = x0 + cell_w - 8
+        y1 = y0 + cell_h - 8
+
+        # device status
+        st = statuses.get(name, {"status": "UNKNOWN", "ts": 0})
+        state = st.get("status", "UNKNOWN")
+        ts = st.get("ts", 0)
+        age = time.time() - ts if ts else None
+
+        # color: UP=green, DOWN=red, UNKNOWN=gray, stale=yellow
+        if state == "UP":
+            color = (50, 200, 50)  # green
+        elif state == "DOWN":
+            color = (30, 30, 220)  # red-ish (BGR)
+        else:
+            color = (180, 180, 180)  # gray
+
+        # if stale (> 90s) treat as UNKNOWN color
+        if age is None or age > 90:
+            color = (160, 160, 160)
+            status_text = "STALE" if age and age > 90 else "UNKNOWN"
+        else:
+            status_text = state
+
+        # draw box + label
+        cv2.rectangle(img, (x0 + 6, y0 + 6), (x1, y1), color, thickness=-1)
+        # inner darker rectangle for contrast
+        cv2.rectangle(img, (x0 + 10, y0 + 10), (x1 - 4, y1 - 4), (12, 12, 12), thickness=-1)
+
+        # text: device name (top-left of cell)
+        name_txt = name.upper()
+        status_txt = f"{status_text} " + (f"{int(age)}s" if age is not None else "")
+
+        # font sizes scale with width
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        name_scale = max(0.6, cell_w / 500.0)
+        status_scale = max(0.5, cell_w / 650.0)
+        cv2.putText(img, name_txt, (x0 + 18, y0 + 34), font, name_scale, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(img, status_txt, (x0 + 18, y0 + 34 + int(28 * status_scale)), font, status_scale, (220, 220, 220), 1, cv2.LINE_AA)
+
+def render_loop(window_name, scale):
+    """Consumer: take frames from queue, overlay info, and display."""
+    last_fps_time = time.time()
+    frames = 0
+    fps = 0.0
+    while running.is_set():
+        try:
+            frame = None
+            try:
+                frame = frame_q.get(timeout=1.0)
+            except queue.Empty:
+                # nothing to show; continue to check running flag
+                continue
+
+            frames += 1
+            now = time.time()
+            if now - last_fps_time >= 1.0:
+                fps = frames / (now - last_fps_time)
+                frames = 0
+                last_fps_time = now
+
+            # resize according to scale
+            if scale != 1.0:
+                h, w = frame.shape[:2]
+                frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+            # overlay timestamp and FPS
+            txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cv2.putText(frame, txt, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"FPS: {fps:.1f}", (12, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
+
+            # draw the 2x2 status grid at bottom
+            draw_status_grid(frame, DEVICE_LIST, bottom_height_ratio=0.22)
+
+            # show
+            cv2.imshow(window_name, frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                logging.info("Q pressed, exiting")
+                running.clear()
+                break
+
+        except Exception as e:
+            logging.exception("Render loop exception: %s", e)
+            # small sleep so we don't spin on repeated errors
+            time.sleep(0.5)
+
+    try:
+        cv2.destroyAllWindows()
     except Exception:
         pass
-    return None
+    logging.info("Render loop exited")
 
-# -------- START / STOP helpers ----------
-def start_background_tasks():
-    # start video thread
-    vt = threading.Thread(target=video_reader, args=(RTSP_URL,), daemon=True)
-    vt.start()
-    # start mqtt thread
-    mt = threading.Thread(target=mqtt_thread, daemon=True)
-    mt.start()
-    return [vt, mt]
+# ---------------- CLEAN SHUTDOWN HANDLER ----------------
+def handle_signal(signum, frame):
+    logging.info("Signal %s received, shutting down...", signum)
+    running.clear()
 
-def install_signal_handlers(app):
-    def handler(signum, frame):
-        logging.info("Signal received, shutting down: %s", signum)
-        _stop_event.set()
+signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, handle_signal)
+
+# ---------------- MAIN START ----------------
+def main():
+    logging.info("Starting dashboard")
+    # start RTSP capture thread
+    cap_thread = threading.Thread(target=rtsp_capture_loop, args=(args.rtsp,), daemon=True)
+    cap_thread.start()
+
+    # start watchdog
+    wd_thread = threading.Thread(target=video_watchdog, args=(args.rtsp,), daemon=True)
+    wd_thread.start()
+
+    # start MQTT
+    mqtt_client = start_mqtt_client()
+
+    # start renderer (main thread)
+    render_loop(args.win_name, args.scale)
+
+    # cleanup
+    running.clear()
+    time.sleep(0.3)
+    if mqtt_client:
         try:
-            app.destroy()
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
         except Exception:
             pass
-    signal.signal(signal.SIGINT, handler)
-    signal.signal(signal.SIGTERM, handler)
-
-# -------- MAIN ----------
-def main():
-    app = Dashboard()
-    install_signal_handlers(app)
-    threads = start_background_tasks()
-    try:
-        app.mainloop()
-    finally:
-        _stop_event.set()
-        # wait a little for threads to exit
-        time.sleep(0.3)
-        logging.info("Dashboard stopped")
+    logging.info("Dashboard stopped")
 
 if __name__ == "__main__":
     main()
