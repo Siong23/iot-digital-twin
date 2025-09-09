@@ -1,389 +1,550 @@
 #!/usr/bin/env python3
-"""
-dashboard.py
+# dashboard.py
+# Full IoT Consumer dashboard with device status panel (2x2 grid).
+# Hardened for long runs: MQTT auto-reconnect, clean shutdown, bounded buffers, video watchdog.
 
-RTSP video dashboard with a bottom 2x2 device status grid.
-
-Usage:
-    python3 dashboard.py --rtsp rtsp://192.168.20.2:8554/proxied --mqtt-host 192.168.20.2
-
-Requirements:
-    pip install opencv-python paho-mqtt numpy
-"""
-
-import argparse
-import logging
+import os
+import sys
 import json
-import threading
 import time
-import queue
-import signal
-from collections import defaultdict, deque
-from datetime import datetime
-import cv2
-import numpy as np
+import psutil
 import paho.mqtt.client as mqtt
+import cv2
+import subprocess
+from datetime import datetime, timedelta
 
-# ---------------- CONFIG & ARGS ----------------
-DEFAULT_RTSP = "rtsp://192.168.20.2:8554/proxied"
-DEFAULT_MQTT_HOST = "192.168.20.2"
-DEFAULT_MQTT_PORT = 1883
-FRAME_QUEUE_MAX = 2  # bounded buffer
-VIDEO_WATCHDOG_TIMEOUT = 6.0  # seconds without new frame => restart capture
+# -------- Optional: use software OpenGL to avoid GPU/driver issues on some boxes --------
+# os.environ.setdefault("QT_OPENGL", "software")
 
-DEVICE_LIST = ["broker", "ipcam", "sensor", "router"]  # order for 2x2 grid
+# Make Qt pick up system plugins (try common paths)
+_possible_qt_paths = [
+    "/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms",
+    "/usr/lib/qt5/plugins/platforms",
+    "/usr/lib64/qt5/plugins/platforms",
+    "/usr/local/lib/qt5/plugins/platforms",
+]
+for _p in _possible_qt_paths:
+    if os.path.isdir(_p):
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = _p
+        break
+# Force XCB platform by default (works for most X11 setups)
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--rtsp", default=DEFAULT_RTSP, help="RTSP URL for the camera")
-parser.add_argument("--mqtt-host", default=DEFAULT_MQTT_HOST, help="MQTT broker host")
-parser.add_argument("--mqtt-port", type=int, default=DEFAULT_MQTT_PORT, help="MQTT broker port")
-parser.add_argument("--mqtt-user", default=None, help="MQTT username (optional)")
-parser.add_argument("--mqtt-pass", default=None, help="MQTT password (optional)")
-parser.add_argument("--win-name", default="Dashboard", help="OpenCV window name")
-parser.add_argument("--scale", type=float, default=1.0, help="Scale display (0.5 = half size)")
-args = parser.parse_args()
-
-# ---------------- LOGGING ----------------
-logging.basicConfig(
-    filename="dashboard.log",
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QGridLayout
 )
-logging.getLogger().addHandler(logging.StreamHandler())  # also print to stdout
+from PyQt5 import QtCore, QtGui
+import pyqtgraph as pg
 
-# ---------------- GLOBAL STATE ----------------
-frame_q = queue.Queue(maxsize=FRAME_QUEUE_MAX)
-running = threading.Event()
-running.set()
+# ---------------- CONFIG ----------------
+STREAM_URL = "rtsp://192.168.20.2:8554/proxied"
+MQTT_BROKER = "192.168.20.2"
+MQTT_USER = "admin"
+MQTT_PASS = "admin123"
+MQTT_TOPIC = "sensors/digital/data"
+MQTT_PORT = 1883
+MQTT_KEEPALIVE = 30  # seconds
 
-last_frame_time = 0.0
-last_frame_lock = threading.Lock()
+# Data buffer limits
+HISTORY_SECONDS = 300        # 5 minutes
+MAX_POINTS = 2000            # hard cap to prevent creep
 
-# statuses: dict -> {"status": "UP"/"DOWN"/"UNKNOWN", "ts": epoch}
-statuses = {}
-for d in DEVICE_LIST:
-    statuses[d] = {"status": "UNKNOWN", "ts": 0}
+# Hover timeout
+HOVER_HIDE_SECONDS = 5.0
 
-# for optional telemetry (temp/humidity)
-telemetry = defaultdict(lambda: {"temp": None, "hum": None, "history": deque(maxlen=120)})
+# No-frame watchdog (video)
+NO_FRAME_TIMEOUT_S = 10
 
-# ---------------- RTSP CAPTURE THREAD ----------------
-def rtsp_capture_loop(rtsp_url):
-    """Producer: capture frames from RTSP into a bounded queue."""
-    global last_frame_time
-    cap = None
-    while running.is_set():
-        try:
-            if cap is None or not cap.isOpened():
-                logging.info("Opening video capture: %s", rtsp_url)
-                cap = cv2.VideoCapture(rtsp_url)
-                if not cap.isOpened():
-                    logging.warning("Unable to open RTSP stream; retrying in 2s")
-                    time.sleep(2)
-                    continue
-                # read one frame to ensure stream started
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    logging.warning("RTSP opened but no frame; retrying in 1s")
-                    time.sleep(1)
-                    continue
-                with last_frame_lock:
-                    last_frame_time = time.time()
-                # push initial frame
-                try:
-                    frame_q.put_nowait(frame)
-                except queue.Full:
-                    pass
+# ---------------- Digital devices to show status for ----------------
+DIGITAL_DEVICES = {
+    "Router": "192.168.10.1",
+    "Broker": "192.168.20.2",
+    "Camera": "192.168.254.11",
+    "Sensor": "192.168.254.10"
+}
 
-            # normal capture loop
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                logging.warning("Frame read failed; closing and reopening capture")
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                cap = None
-                time.sleep(1)
-                continue
+# Monitor settings
+MONITOR_INTERVAL_S = 5.0  # how often to ping devices
 
-            # put frame into bounded queue (drop oldest if full)
-            try:
-                frame_q.put(frame, timeout=0.2)
-            except queue.Full:
-                try:
-                    _ = frame_q.get_nowait()  # drop oldest
-                    frame_q.put_nowait(frame)
-                except Exception:
-                    pass
+# -------------------- Data Buffers --------------------
+time_stamps = []
+temperature_values = []
+humidity_values = []
 
-            with last_frame_lock:
-                last_frame_time = time.time()
+# -------------------- MQTT Callbacks --------------------
+class MqttState:
+    connected = False
+mqtt_state = MqttState()
 
-        except Exception as e:
-            logging.exception("RTSP capture exception: %s", e)
-            # try to close and reopen
-            try:
-                if cap:
-                    cap.release()
-            except Exception:
-                pass
-            cap = None
-            time.sleep(2)
+def trim_buffers():
+    """Enforce time-based (5 min) and count-based (MAX_POINTS) limits."""
+    if len(time_stamps) > 1:
+        while time_stamps and (time_stamps[-1] - time_stamps[0]).total_seconds() > HISTORY_SECONDS:
+            time_stamps.pop(0); temperature_values.pop(0); humidity_values.pop(0)
+    excess = len(time_stamps) - MAX_POINTS
+    if excess > 0:
+        del time_stamps[:excess]; del temperature_values[:excess]; del humidity_values[:excess]
 
-    # cleanup
+def on_connect(client, userdata, flags, rc):
+    mqtt_state.connected = (rc == 0)
+    if mqtt_state.connected:
+        client.subscribe(MQTT_TOPIC, qos=0)
+
+def on_disconnect(client, userdata, rc):
+    mqtt_state.connected = False
+
+def on_message(client, userdata, msg):
     try:
-        if cap:
-            cap.release()
-    except Exception:
-        pass
-    logging.info("RTSP capture loop exited")
-
-# ---------------- VIDEO WATCHDOG THREAD ----------------
-def video_watchdog(rtsp_url):
-    """Restart capture by clearing the queue if no frames arrive for a while."""
-    global last_frame_time
-    while running.is_set():
-        time.sleep(1.0)
-        with last_frame_lock:
-            t = last_frame_time
-        if t == 0:
-            continue
-        if time.time() - t > VIDEO_WATCHDOG_TIMEOUT:
-            logging.warning("Video watchdog: no frames for %.1fs -> clearing queue to force reopen", time.time() - t)
-            # empty queue to trigger capture thread to reopen
-            with frame_q.mutex:
-                frame_q.queue.clear()
-            # set last_frame_time to now so we don't spam
-            with last_frame_lock:
-                last_frame_time = time.time()
-
-# ---------------- MQTT HANDLERS ----------------
-def mqtt_on_connect(client, userdata, flags, rc):
-    if rc == 0:
-        logging.info("MQTT connected to %s:%d", args.mqtt_host, args.mqtt_port)
-        prefix = userdata.get("mqtt_prefix", "health")
-        client.subscribe(f"{prefix}/#")
-    else:
-        logging.warning("MQTT connect failed rc=%s", rc)
-
-def mqtt_on_message(client, userdata, msg):
-    try:
-        topic = msg.topic
-        # expected: health/<src>/<dst>
-        parts = topic.split("/")
-        if len(parts) >= 3 and parts[0] == userdata.get("mqtt_prefix", "health"):
-            _, src, dst = parts[:3]
-            try:
-                payload = msg.payload.decode("utf-8").strip()
-                obj = json.loads(payload) if payload else {}
-            except Exception:
-                obj = {}
-            status = obj.get("status", None)
-            if status is None:
-                # fallback: if payload is text "UP"/"DOWN"
-                txt = payload.upper() if isinstance(payload, str) else ""
-                if txt in ("UP", "DOWN"):
-                    status = txt
-            if status:
-                status_val = "UP" if status.upper() == "UP" else "DOWN"
-                if src in statuses:
-                    statuses[src]["status"] = status_val
-                    statuses[src]["ts"] = time.time()
-                    logging.info("MQTT: %s -> %s", src, status_val)
-                else:
-                    # maybe set for dst as well if not known
-                    if dst in statuses:
-                        statuses[dst]["status"] = status_val
-                        statuses[dst]["ts"] = time.time()
-                        logging.info("MQTT: %s -> %s (applied to dst %s)", src, status_val, dst)
+        data = json.loads(msg.payload.decode())
+        ts_raw = data.get("timestamp")
+        if isinstance(ts_raw, str):
+            timestamp = datetime.fromisoformat(ts_raw)
         else:
-            # optional telemetry topics such as telemetry/<device>/temp
-            parts = topic.split("/")
-            if len(parts) >= 3 and parts[0] in ("telemetry", "telemetery", "tele"):
-                _, device, metric = parts[:3]
-                try:
-                    val = float(msg.payload.decode("utf-8"))
-                except Exception:
-                    val = None
-                if device in telemetry:
-                    if metric in ("temp", "temperature"):
-                        telemetry[device]["temp"] = val
-                        telemetry[device]["history"].append(("temp", time.time(), val))
-                    elif metric in ("hum", "humidity"):
-                        telemetry[device]["hum"] = val
-                        telemetry[device]["history"].append(("hum", time.time(), val))
+            timestamp = datetime.utcnow()
+        temp = float(data["temperature"])
+        hum = float(data["humidity"])
+
+        time_stamps.append(timestamp)
+        temperature_values.append(temp)
+        humidity_values.append(hum)
+        trim_buffers()
     except Exception as e:
-        logging.exception("Error in mqtt_on_message: %s", e)
+        print("Error parsing MQTT message:", e)
 
-def start_mqtt_client():
-    client = mqtt.Client(userdata={"mqtt_prefix": "health"})
-    if args.mqtt_user:
-        client.username_pw_set(args.mqtt_user, args.mqtt_pass or "")
-    client.on_connect = mqtt_on_connect
-    client.on_message = mqtt_on_message
-    try:
-        client.connect(args.mqtt_host, args.mqtt_port, keepalive=60)
-        client.loop_start()
-        return client
-    except Exception as e:
-        logging.exception("MQTT connect failed: %s", e)
-        return None
-
-# ---------------- RENDER / UI ----------------
-def draw_status_grid(img, devices, bottom_height_ratio=0.22):
+# -------------------- DeviceMonitor Thread --------------------
+class DeviceMonitor(QtCore.QThread):
     """
-    Draw a 2x2 grid of device statuses at bottom of image.
-    devices: list of device names in order -> [0] top-left, [1] top-right, [2] bottom-left, [3] bottom-right
+    Background thread that pings each device in DIGITAL_DEVICES periodically
+    and emits status updates as a dict: { "Router": True, "Broker": False, ... }
     """
-    h, w = img.shape[:2]
-    bh = int(h * bottom_height_ratio)
-    grid_y0 = h - bh
-    # draw a semi-transparent background rectangle
-    overlay = img.copy()
-    cv2.rectangle(overlay, (0, grid_y0), (w, h), (10, 10, 10), -1)
-    alpha = 0.65
-    cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
+    status_signal = QtCore.pyqtSignal(dict)
 
-    # grid: 2 cols x 2 rows
-    cols = 2
-    rows = 2
-    cell_w = w // cols
-    cell_h = bh // rows
+    def __init__(self, devices: dict, interval_s: float = 5.0, parent=None):
+        super().__init__(parent)
+        self.devices = devices.copy()
+        self.interval = float(interval_s)
+        self._running = True
 
-    for idx, name in enumerate(devices):
-        col = idx % cols
-        row = idx // cols
-        x0 = col * cell_w
-        y0 = grid_y0 + row * cell_h
-        x1 = x0 + cell_w - 8
-        y1 = y0 + cell_h - 8
+    def run(self):
+        while self._running:
+            state = {}
+            for name, ip in self.devices.items():
+                alive = self.ping(ip)
+                state[name] = alive
+            self.status_signal.emit(state)
+            slept = 0.0
+            while self._running and slept < self.interval:
+                time.sleep(0.2)
+                slept += 0.2
 
-        # device status
-        st = statuses.get(name, {"status": "UNKNOWN", "ts": 0})
-        state = st.get("status", "UNKNOWN")
-        ts = st.get("ts", 0)
-        age = time.time() - ts if ts else None
-
-        # color: UP=green, DOWN=red, UNKNOWN=gray, stale=yellow
-        if state == "UP":
-            color = (50, 200, 50)  # green
-        elif state == "DOWN":
-            color = (30, 30, 220)  # red-ish (BGR)
-        else:
-            color = (180, 180, 180)  # gray
-
-        # if stale (> 90s) treat as UNKNOWN color
-        if age is None or age > 90:
-            color = (160, 160, 160)
-            status_text = "STALE" if age and age > 90 else "UNKNOWN"
-        else:
-            status_text = state
-
-        # draw box + label
-        cv2.rectangle(img, (x0 + 6, y0 + 6), (x1, y1), color, thickness=-1)
-        # inner darker rectangle for contrast
-        cv2.rectangle(img, (x0 + 10, y0 + 10), (x1 - 4, y1 - 4), (12, 12, 12), thickness=-1)
-
-        # text: device name (top-left of cell)
-        name_txt = name.upper()
-        status_txt = f"{status_text} " + (f"{int(age)}s" if age is not None else "")
-
-        # font sizes scale with width
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        name_scale = max(0.6, cell_w / 500.0)
-        status_scale = max(0.5, cell_w / 650.0)
-        cv2.putText(img, name_txt, (x0 + 18, y0 + 34), font, name_scale, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(img, status_txt, (x0 + 18, y0 + 34 + int(28 * status_scale)), font, status_scale, (220, 220, 220), 1, cv2.LINE_AA)
-
-def render_loop(window_name, scale):
-    """Consumer: take frames from queue, overlay info, and display."""
-    last_fps_time = time.time()
-    frames = 0
-    fps = 0.0
-    while running.is_set():
+    def stop(self):
+        self._running = False
         try:
-            frame = None
-            try:
-                frame = frame_q.get(timeout=1.0)
-            except queue.Empty:
-                # nothing to show; continue to check running flag
-                continue
-
-            frames += 1
-            now = time.time()
-            if now - last_fps_time >= 1.0:
-                fps = frames / (now - last_fps_time)
-                frames = 0
-                last_fps_time = now
-
-            # resize according to scale
-            if scale != 1.0:
-                h, w = frame.shape[:2]
-                frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
-            # overlay timestamp and FPS
-            txt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cv2.putText(frame, txt, (12, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
-            cv2.putText(frame, f"FPS: {fps:.1f}", (12, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
-
-            # draw the 2x2 status grid at bottom
-            draw_status_grid(frame, DEVICE_LIST, bottom_height_ratio=0.22)
-
-            # show
-            cv2.imshow(window_name, frame)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
-                logging.info("Q pressed, exiting")
-                running.clear()
-                break
-
-        except Exception as e:
-            logging.exception("Render loop exception: %s", e)
-            # small sleep so we don't spin on repeated errors
-            time.sleep(0.5)
-
-    try:
-        cv2.destroyAllWindows()
-    except Exception:
-        pass
-    logging.info("Render loop exited")
-
-# ---------------- CLEAN SHUTDOWN HANDLER ----------------
-def handle_signal(signum, frame):
-    logging.info("Signal %s received, shutting down...", signum)
-    running.clear()
-
-signal.signal(signal.SIGINT, handle_signal)
-signal.signal(signal.SIGTERM, handle_signal)
-
-# ---------------- MAIN START ----------------
-def main():
-    logging.info("Starting dashboard")
-    # start RTSP capture thread
-    cap_thread = threading.Thread(target=rtsp_capture_loop, args=(args.rtsp,), daemon=True)
-    cap_thread.start()
-
-    # start watchdog
-    wd_thread = threading.Thread(target=video_watchdog, args=(args.rtsp,), daemon=True)
-    wd_thread.start()
-
-    # start MQTT
-    mqtt_client = start_mqtt_client()
-
-    # start renderer (main thread)
-    render_loop(args.win_name, args.scale)
-
-    # cleanup
-    running.clear()
-    time.sleep(0.3)
-    if mqtt_client:
-        try:
-            mqtt_client.loop_stop()
-            mqtt_client.disconnect()
+            self.wait(timeout=2000)
         except Exception:
             pass
-    logging.info("Dashboard stopped")
+
+    @staticmethod
+    def ping(ip: str) -> bool:
+        """
+        Use system ping. Returns True if reachable.
+        Uses Linux `ping -c1 -W1`.
+        """
+        try:
+            res = subprocess.run(
+                ["ping", "-c", "1", "-W", "1", ip],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+# -------------------- Video Thread --------------------
+class VideoThread(QtCore.QThread):
+    frame_received = QtCore.pyqtSignal(QtGui.QImage)
+    status_changed = QtCore.pyqtSignal(bool)
+
+    def __init__(self, url, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.running = True
+        self._cap = None
+        self._last_frame_ts = 0.0
+
+    def run(self):
+        while self.running:
+            try:
+                self._cap = cv2.VideoCapture(self.url)
+                opened = self._cap.isOpened()
+                self.status_changed.emit(opened)
+                if not opened:
+                    self._safe_release()
+                    time.sleep(2)
+                    continue
+
+                self._last_frame_ts = time.time()
+                while self.running and self._cap.isOpened():
+                    ret, frame = self._cap.read()
+                    if not ret or frame is None:
+                        self.status_changed.emit(False)
+                        break
+
+                    self._last_frame_ts = time.time()
+
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    h, w, ch = rgb.shape
+                    bytes_per_line = ch * w
+                    qt_image = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                    self.frame_received.emit(qt_image.copy())
+                    self.status_changed.emit(True)
+
+                    if time.time() - self._last_frame_ts > NO_FRAME_TIMEOUT_S:
+                        break
+
+                    QtCore.QThread.msleep(20)
+
+                self._safe_release()
+                time.sleep(1)
+            except Exception as e:
+                print("VideoThread error:", e)
+                self.status_changed.emit(False)
+                self._safe_release()
+                time.sleep(2)
+
+    def stop(self):
+        self.running = False
+        self._safe_release()
+        try:
+            self.wait(timeout=2000)
+        except Exception:
+            pass
+
+    def _safe_release(self):
+        try:
+            if self._cap:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+        finally:
+            self._cap = None
+
+# -------------------- Custom Time Axis --------------------
+class TimeAxisItem(pg.AxisItem):
+    def tickStrings(self, values, scale, spacing):
+        return [datetime.fromtimestamp(v).strftime("%H:%M:%S") for v in values]
+
+# -------------------- Dashboard Widget --------------------
+class Dashboard(QWidget):
+    def __init__(self, mqtt_client):
+        super().__init__()
+        self.setWindowTitle("Digital Twin IoT Dashboard")
+        self.resize(1200, 760)
+        self.mqtt_client = mqtt_client
+
+        main_layout = QVBoxLayout(self)
+
+        # Top row: video (left) and graphs (right)
+        top_h = QHBoxLayout()
+        main_layout.addLayout(top_h, stretch=6)
+
+        # Video panel
+        video_widget = QWidget()
+        video_layout = QVBoxLayout(video_widget)
+        video_layout.setContentsMargins(0,0,0,0)
+
+        self.video_label = QLabel("Stream loading...")
+        self.video_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.video_label.setMinimumSize(480, 360)
+        self.video_label.setStyleSheet("background-color: black; color: white;")
+        video_layout.addWidget(self.video_label)
+
+        ctrl_row = QHBoxLayout()
+        self.stream_status_label = QLabel("Stream: Unknown")
+        ctrl_row.addWidget(self.stream_status_label)
+        self.btn_toggle_stream = QPushButton("Pause")
+        self.btn_toggle_stream.setCheckable(True)
+        self.btn_toggle_stream.clicked.connect(self.toggle_stream)
+        ctrl_row.addWidget(self.btn_toggle_stream)
+        ctrl_row.addStretch()
+        video_layout.addLayout(ctrl_row)
+
+        top_h.addWidget(video_widget, stretch=5)
+
+        # Right side: graphs
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0,0,0,0)
+
+        self.graph_widget = pg.GraphicsLayoutWidget()
+        right_layout.addWidget(self.graph_widget)
+
+        # Temperature plot (top)
+        self.temp_plot = self.graph_widget.addPlot(
+            title="Temperature (°C)",
+            axisItems={'bottom': TimeAxisItem(orientation='bottom')}
+        )
+        self.temp_plot.setLabel('left', 'Temperature (°C)', color='red')
+        self.temp_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.temp_curve = self.temp_plot.plot(pen=pg.mkPen('r', width=2))
+
+        # newest label under temp
+        self.temp_latest_label = QLabel("Latest Temp: --")
+        right_layout.addWidget(self.temp_latest_label)
+
+        self.graph_widget.nextRow()
+
+        # Humidity plot (bottom) - yellow/gold color
+        self.hum_plot = self.graph_widget.addPlot(
+            title="Humidity (%)",
+            axisItems={'bottom': TimeAxisItem(orientation='bottom')}
+        )
+        self.hum_plot.setLabel('left', 'Humidity (%)', color='orange')
+        self.hum_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.hum_curve = self.hum_plot.plot(pen=pg.mkPen(color=(255,215,0), width=2))
+
+        # newest label under hum
+        self.hum_latest_label = QLabel("Latest Humidity: --")
+        right_layout.addWidget(self.hum_latest_label)
+
+        top_h.addWidget(right_widget, stretch=5)
+
+        # bottom: device status panel (2x2 grid)
+        self.status_panel = QWidget()
+        grid = QGridLayout(self.status_panel)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(6)
+
+        self.status_labels = {}
+        # Create a label widget for each device and place in 2x2 grid
+        items = list(DIGITAL_DEVICES.items())
+        for idx, (name, ip) in enumerate(items):
+            row = idx // 2
+            col = idx % 2
+            lbl = QLabel(f"{name} ({ip}): Checking...")
+            lbl.setStyleSheet("color: gray; font-weight: bold;")
+            lbl.setMinimumWidth(300)
+            grid.addWidget(lbl, row, col)
+            self.status_labels[name] = lbl
+
+        main_layout.addWidget(self.status_panel, stretch=0)
+
+        # small global status row
+        self.status_label = QLabel("Initializing device statuses...")
+        main_layout.addWidget(self.status_label, stretch=0)
+
+        # Hover crosshairs and labels for temp
+        self.vLine_temp = pg.InfiniteLine(angle=90, movable=False,
+                                          pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+        self.hLine_temp = pg.InfiniteLine(angle=0, movable=False,
+                                          pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
+        self.label_temp = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
+        self.vLine_temp.hide(); self.hLine_temp.hide(); self.label_temp.hide()
+        self.temp_plot.addItem(self.vLine_temp, ignoreBounds=True)
+        self.temp_plot.addItem(self.hLine_temp, ignoreBounds=True)
+        self.temp_plot.addItem(self.label_temp)
+
+        # Hover crosshairs and labels for hum
+        self.vLine_hum = pg.InfiniteLine(angle=90, movable=False,
+                                         pen=pg.mkPen(color=(255,215,0), style=QtCore.Qt.DashLine))
+        self.hLine_hum = pg.InfiniteLine(angle=0, movable=False,
+                                         pen=pg.mkPen(color=(255,215,0), style=QtCore.Qt.DashLine))
+        self.label_hum = pg.TextItem(anchor=(0,1), border='w', fill=(30,30,30,200))
+        self.vLine_hum.hide(); self.hLine_hum.hide(); self.label_hum.hide()
+        self.hum_plot.addItem(self.vLine_hum, ignoreBounds=True)
+        self.hum_plot.addItem(self.hLine_hum, ignoreBounds=True)
+        self.hum_plot.addItem(self.label_hum)
+
+        # Timer
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_dashboard)
+        self.timer.start(1000)
+
+        pg.setConfigOptions(antialias=True)
+
+        # Mouse move signals
+        self.temp_plot.scene().sigMouseMoved.connect(self.on_mouse_moved_temp)
+        self.hum_plot.scene().sigMouseMoved.connect(self.on_mouse_moved_hum)
+
+        self.last_mouse_time_temp = 0.0
+        self.last_mouse_time_hum = 0.0
+
+        # Video thread
+        self.video_thread = VideoThread(STREAM_URL)
+        self.video_thread.frame_received.connect(self.on_frame, QtCore.Qt.QueuedConnection)
+        self.video_thread.status_changed.connect(self.on_stream_status, QtCore.Qt.QueuedConnection)
+        self.video_thread.start()
+        self.stream_paused = False
+
+        # Device monitor thread
+        self.device_monitor = DeviceMonitor(DIGITAL_DEVICES, interval_s=MONITOR_INTERVAL_S)
+        self.device_monitor.status_signal.connect(self.on_device_status_update, QtCore.Qt.QueuedConnection)
+        self.device_monitor.start()
+
+    def toggle_stream(self, checked):
+        self.stream_paused = checked
+        self.btn_toggle_stream.setText("Resume" if checked else "Pause")
+
+    def on_frame(self, qimage):
+        if self.stream_paused:
+            return
+        try:
+            pix = QtGui.QPixmap.fromImage(qimage)
+            pix = pix.scaled(self.video_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+            self.video_label.setPixmap(pix)
+        except Exception:
+            pass
+
+    def on_stream_status(self, up: bool):
+        self.stream_status_label.setText("Stream: UP" if up else "Stream: DOWN")
+        if not up:
+            self.video_label.setText("Stream unavailable")
+            self.video_label.setPixmap(QtGui.QPixmap())
+
+    def on_device_status_update(self, status_dict):
+        """
+        Handler for device monitor updates.
+        status_dict: {"Router": True/False, "Broker": True/False, ...}
+        """
+        for name, alive in status_dict.items():
+            lbl = self.status_labels.get(name)
+            if not lbl:
+                continue
+            ip = DIGITAL_DEVICES.get(name, "unknown")
+            if alive:
+                lbl.setText(f"{name} ({ip}): UP ✅")
+                lbl.setStyleSheet("color: green; font-weight: bold;")
+            else:
+                lbl.setText(f"{name} ({ip}): DOWN ❌")
+                lbl.setStyleSheet("color: red; font-weight: bold;")
+        # update global status line too
+        mqtt_txt = "MQTT: UP" if mqtt_state.connected else "MQTT: DOWN (reconnecting)"
+        cpu = psutil.cpu_percent(interval=0.05)
+        ram = psutil.virtual_memory().percent
+        self.status_label.setText(f"{mqtt_txt}    CPU: {cpu}%   RAM: {ram}%")
+
+    def update_dashboard(self):
+        # Update graphs and labels
+        if not time_stamps:
+            self.temp_latest_label.setText("Latest Temp: --")
+            self.hum_latest_label.setText("Latest Humidity: --")
+            return
+
+        times_epoch = [t.timestamp() for t in time_stamps]
+        self.temp_curve.setData(times_epoch, temperature_values)
+        self.hum_curve.setData(times_epoch, humidity_values)
+
+        newest_time = time_stamps[-1].strftime("%H:%M:%S")
+        newest_temp = temperature_values[-1]
+        newest_hum = humidity_values[-1]
+        self.temp_latest_label.setText(f"Latest Temp: {newest_temp:.2f} °C    at {newest_time}")
+        self.hum_latest_label.setText(f"Latest Humidity: {newest_hum:.2f}%    at {newest_time}")
+
+        now_ts = time.time()
+        if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS and (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
+            if times_epoch:
+                self.temp_plot.setXRange(times_epoch[-1] - HISTORY_SECONDS, times_epoch[-1])
+                self.hum_plot.setXRange(times_epoch[-1] - HISTORY_SECONDS, times_epoch[-1])
+
+        self.temp_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+        self.hum_plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
+
+        if (now_ts - self.last_mouse_time_temp) > HOVER_HIDE_SECONDS:
+            self.vLine_temp.hide(); self.hLine_temp.hide(); self.label_temp.hide()
+        if (now_ts - self.last_mouse_time_hum) > HOVER_HIDE_SECONDS:
+            self.vLine_hum.hide(); self.hLine_hum.hide(); self.label_hum.hide()
+
+    def on_mouse_moved_temp(self, pos):
+        if not time_stamps: return
+        vb = self.temp_plot.vb
+        mouse_point = vb.mapSceneToView(pos)
+        x = mouse_point.x()
+        times_epoch = [t.timestamp() for t in time_stamps]
+        idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
+        if 0 <= idx < len(times_epoch):
+            self.last_mouse_time_temp = time.time()
+            self.vLine_temp.setPos(times_epoch[idx]); self.hLine_temp.setPos(temperature_values[idx])
+            self.vLine_temp.show(); self.hLine_temp.show()
+            txt = f"<span style='color:red'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>Temp: {temperature_values[idx]:.2f}°C</span>"
+            self.label_temp.setHtml(txt)
+            x_min, x_max = vb.viewRange()[0]; y_min, y_max = vb.viewRange()[1]
+            x_margin = max(1.0, (x_max - x_min) * 0.05); y_margin = max(0.1, (y_max - y_min) * 0.05)
+            label_x = min(max(times_epoch[idx], x_min + x_margin), x_max - x_margin)
+            label_y = min(max(temperature_values[idx], y_min + y_margin), y_max - y_margin)
+            self.label_temp.setPos(label_x, label_y); self.label_temp.show()
+
+    def on_mouse_moved_hum(self, pos):
+        if not time_stamps: return
+        vb = self.hum_plot.vb
+        mouse_point = vb.mapSceneToView(pos)
+        x = mouse_point.x()
+        times_epoch = [t.timestamp() for t in time_stamps]
+        idx = min(range(len(times_epoch)), key=lambda i: abs(times_epoch[i] - x))
+        if 0 <= idx < len(times_epoch):
+            self.last_mouse_time_hum = time.time()
+            self.vLine_hum.setPos(times_epoch[idx]); self.hLine_hum.setPos(humidity_values[idx])
+            self.vLine_hum.show(); self.hLine_hum.show()
+            txt = f"<span style='color:orange'>Time: {time_stamps[idx].strftime('%H:%M:%S')}<br>Humidity: {humidity_values[idx]:.2f}%</span>"
+            self.label_hum.setHtml(txt)
+            vb_x_min, vb_x_max = vb.viewRange()[0]; vb_y_min, vb_y_max = vb.viewRange()[1]
+            x_margin = max(1.0, (vb_x_max - vb_x_min) * 0.05); y_margin = max(0.1, (vb_y_max - vb_y_min) * 0.05)
+            label_x = min(max(times_epoch[idx], vb_x_min + x_margin), vb_x_max - x_margin)
+            label_y = min(max(humidity_values[idx], vb_y_min + y_margin), vb_y_max - y_margin)
+            self.label_hum.setPos(label_x, label_y); self.label_hum.show()
+
+    def closeEvent(self, event):
+        # Stop video thread & device monitor
+        try:
+            self.video_thread.stop()
+        except Exception:
+            pass
+        try:
+            self.device_monitor.stop()
+        except Exception:
+            pass
+        # Cleanly stop MQTT
+        try:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+        except Exception:
+            pass
+        event.accept()
+
+# -------------------- Main --------------------
+def main():
+    # Qt app
+    app = QApplication(sys.argv)
+
+    # MQTT client
+    client = mqtt.Client()
+    client.username_pw_set(MQTT_USER, MQTT_PASS)
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+    client.on_message = on_message
+    client.reconnect_delay_set(min_delay=1, max_delay=30)
+    client.will_set("system/dashboard/status", payload="offline", qos=0, retain=False)
+
+    # initial connect (non-blocking)
+    try:
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
+    except Exception as e:
+        print("Initial MQTT connect failed:", e)
+    client.loop_start()
+
+    dashboard = Dashboard(client)
+    dashboard.show()
+
+    rc = app.exec_()
+
+    # Ensure cleanup if not already
+    try:
+        client.loop_stop()
+        client.disconnect()
+    except Exception:
+        pass
+
+    sys.exit(rc)
 
 if __name__ == "__main__":
     main()
