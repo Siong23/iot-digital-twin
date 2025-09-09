@@ -2,16 +2,16 @@
 # dashboard.py
 # Full IoT Consumer dashboard with device status panel (2x2 grid).
 # Hardened for long runs: MQTT auto-reconnect, clean shutdown, bounded buffers, video watchdog.
+# Removed MQTT up/down and CPU/RAM display per request.
 
 import os
 import sys
 import json
 import time
-import psutil
 import paho.mqtt.client as mqtt
 import cv2
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # -------- Optional: use software OpenGL to avoid GPU/driver issues on some boxes --------
 # os.environ.setdefault("QT_OPENGL", "software")
@@ -72,10 +72,6 @@ temperature_values = []
 humidity_values = []
 
 # -------------------- MQTT Callbacks --------------------
-class MqttState:
-    connected = False
-mqtt_state = MqttState()
-
 def trim_buffers():
     """Enforce time-based (5 min) and count-based (MAX_POINTS) limits."""
     if len(time_stamps) > 1:
@@ -86,12 +82,13 @@ def trim_buffers():
         del time_stamps[:excess]; del temperature_values[:excess]; del humidity_values[:excess]
 
 def on_connect(client, userdata, flags, rc):
-    mqtt_state.connected = (rc == 0)
-    if mqtt_state.connected:
+    # Simply subscribe to sensor topic when connected
+    if rc == 0:
         client.subscribe(MQTT_TOPIC, qos=0)
 
 def on_disconnect(client, userdata, rc):
-    mqtt_state.connected = False
+    # no UI status for MQTT anymore — keep quiet on disconnect
+    pass
 
 def on_message(client, userdata, msg):
     try:
@@ -330,10 +327,6 @@ class Dashboard(QWidget):
 
         main_layout.addWidget(self.status_panel, stretch=0)
 
-        # small global status row
-        self.status_label = QLabel("Initializing device statuses...")
-        main_layout.addWidget(self.status_label, stretch=0)
-
         # Hover crosshairs and labels for temp
         self.vLine_temp = pg.InfiniteLine(angle=90, movable=False,
                                           pen=pg.mkPen('r', style=QtCore.Qt.DashLine))
@@ -418,11 +411,6 @@ class Dashboard(QWidget):
             else:
                 lbl.setText(f"{name} ({ip}): DOWN ❌")
                 lbl.setStyleSheet("color: red; font-weight: bold;")
-        # update global status line too
-        mqtt_txt = "MQTT: UP" if mqtt_state.connected else "MQTT: DOWN (reconnecting)"
-        cpu = psutil.cpu_percent(interval=0.05)
-        ram = psutil.virtual_memory().percent
-        self.status_label.setText(f"{mqtt_txt}    CPU: {cpu}%   RAM: {ram}%")
 
     def update_dashboard(self):
         # Update graphs and labels
@@ -516,14 +504,13 @@ def main():
     # Qt app
     app = QApplication(sys.argv)
 
-    # MQTT client
+    # MQTT client (kept for sensor data)
     client = mqtt.Client()
     client.username_pw_set(MQTT_USER, MQTT_PASS)
     client.on_connect = on_connect
     client.on_disconnect = on_disconnect
     client.on_message = on_message
     client.reconnect_delay_set(min_delay=1, max_delay=30)
-    client.will_set("system/dashboard/status", payload="offline", qos=0, retain=False)
 
     # initial connect (non-blocking)
     try:
