@@ -22,7 +22,7 @@ import time
 import paho.mqtt.client as mqtt
 import cv2  
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ---------------- CONFIG ----------------
 STREAM_URL = "rtsp://admin:admin123@192.168.20.2:8554/proxied"
@@ -83,9 +83,15 @@ def on_message(client, userdata, msg):
         data = json.loads(msg.payload.decode())
         ts_raw = data.get("timestamp")
         if isinstance(ts_raw, str):
+            # Parse ISO string
             timestamp = datetime.fromisoformat(ts_raw)
+            # If it's naive (no tzinfo), assume UTC
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
         else:
-            timestamp = datetime.utcnow()
+            # Use timezone-aware UTC datetime
+            timestamp = datetime.now(timezone.utc)
+
         temp = float(data["temperature"])
         hum = float(data["humidity"])
 
