@@ -35,7 +35,7 @@ COLS = [
 
 def make_args():
     p = argparse.ArgumentParser(description="Publish NPP CSV rows to MQTT")
-    p.add_argument("--csv", default="/mnt/data/1.csv", help="CSV file path")
+    p.add_argument("--csv", default="1.csv", help="CSV file path")
     p.add_argument("--broker", default="192.168.20.2", help="MQTT broker IP")
     p.add_argument("--port", type=int, default=1883)
     p.add_argument("--user", default="admin")
