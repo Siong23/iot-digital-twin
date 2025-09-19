@@ -26,18 +26,20 @@ The testbed consists of several key components:
 
 ```
 ├── AttackThreat/              # Security testing framework
-│   ├── exploit.py             # Automated vulnerability scanning
-│   ├── exploit_interactive.py # Interactive security testing
-│   ├── credentials.txt        # Common IoT default credentials
 │   ├── brute-force_cycle/     # Brute force attack modules
 │   ├── ddos_cycle/            # DDoS attack simulation
+│   ├── cameradarexploit.sh    # Cameradar RTSP attack wrapper
+│   ├── credentials.txt        # Common IoT default credentials
+│   ├── exploit.py             # Automated vulnerability scanning
+│   ├── exploit_interactive.py # Interactive security testing
+│   ├── exploit_interactive_backup.py # Interactive security testing backup
 │   └── requirements.txt       # Python dependencies
 ├── Collected Data/            # Dataset storage and management
 ├── IoTDevice                  # IoT Device Scenarios
-│   ├── MQTTScenarios/         # MQTT broker and data management
 │   ├── MQTTCaptureData/       # MQTT data capture modules
+│   ├── MQTTScenarios/         # MQTT broker and data management
 │   └── RTSPCaptureData/       # RTSP stream capture modules
-├── TSMixer/                   # TSM-NIDS: AI-powered intrusion detection
+├── TSM-NIDS/                  # TSM-NIDS: AI-powered intrusion detection
 │   ├── AttackClassification/  # Multi-class attack type classification
 │   ├── AttackIdentification/  # Binary attack detection
 │   └── IoTDigitalTwin/        # Real-world IoT data analysis
