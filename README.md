@@ -25,26 +25,29 @@ This testbed simulates real-world IoT environments with digital twin capabilitie
 The testbed consists of several key components:
 
 ```
-├── Agent/                    # MQTT broker and IoT simulation tools
-│   ├── publish.py           # MQTT message publishing utilities
-│   └── retrieve.py          # Data retrieval utilities
-├── AttackThreat/            # Security testing framework
-│   ├── exploit.py           # Automated vulnerability scanning
+├── AttackThreat/              # Security testing framework
+│   ├── exploit.py             # Automated vulnerability scanning
 │   ├── exploit_interactive.py # Interactive security testing
-│   ├── credentials.txt      # Common IoT default credentials
-│   ├── brute-force_cycle/   # Brute force attack modules
-│   ├── ddos_cycle/          # DDoS attack simulation
-│   └── requirements.txt     # Python dependencies
-├── TSMixer/                 # TSM-NIDS: AI-powered intrusion detection
-│   ├── AttackClassification/ # Multi-class attack type classification
-│   ├── AttackIdentification/ # Binary attack detection
-│   └── IoTDigitalTwin/      # Real-world IoT data analysis
-├── Collected Data/          # Dataset storage and management
-├── IoTDevice                # IoT Device Scenarios
-│   ├── MQTTScenarios        # MQTT broker and data management
-│   ├── MQTTCaptureData/     # MQTT data capture modules
-│   └── RTSPCaptureData/     # RTSP stream capture modules
-└── README.md               # This documentation
+│   ├── credentials.txt        # Common IoT default credentials
+│   ├── brute-force_cycle/     # Brute force attack modules
+│   ├── ddos_cycle/            # DDoS attack simulation
+│   └── requirements.txt       # Python dependencies
+├── Collected Data/            # Dataset storage and management
+├── IoTDevice                  # IoT Device Scenarios
+│   ├── MQTTScenarios/         # MQTT broker and data management
+│   ├── MQTTCaptureData/       # MQTT data capture modules
+│   └── RTSPCaptureData/       # RTSP stream capture modules
+├── TSMixer/                   # TSM-NIDS: AI-powered intrusion detection
+│   ├── AttackClassification/  # Multi-class attack type classification
+│   ├── AttackIdentification/  # Binary attack detection
+│   └── IoTDigitalTwin/        # Real-world IoT data analysis
+├── TwinningAgent/             # Twinning agent for digital-physical sync
+│   ├── config/                # Configuration sync code
+│   ├── dashboard/             # Digital & physical dashboard code
+│   └── data/                  # Dataflow management modules
+│   └── status/                # Status synchronization modules
+│   └── Documentation.docx     # Digital twin documentation
+└── README.md                  # This documentation
 ```
 
 ## 🚀 Quick Start
