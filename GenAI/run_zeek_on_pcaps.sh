@@ -87,12 +87,12 @@ for pcap in "${PCAPS[@]}"; do
   logfile="$target_dir/zeek_run.log"
   timestamp=$(date --iso-8601=seconds)
   echo "Run start: $timestamp" >> "$logfile"
-  echo "zeek -r \"$pcap\"" >> "$logfile"
+  echo "zeek -r \"$pcap\" local" >> "$logfile"
 
   # run zeek; capture exit status
   (
     cd "$target_dir"
-    if zeek -r "$pcap" >> "$logfile" 2>&1; then
+    if zeek -r "$pcap" local >> "$logfile" 2>&1; then
       echo "Zeek finished OK for $pcap (logs in $target_dir)" | tee -a "$logfile"
       processed=$((processed+1))
     else
