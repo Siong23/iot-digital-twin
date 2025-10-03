@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# run_zeek_on_pcaps.sh
+# run_zeek_on_pcaps_local.sh
 # Usage:
-#   ./run_zeek_on_pcaps.sh            # default: scan dataset/PCAPs and write to dataset/ZEEK_LOGS
-#   ./run_zeek_on_pcaps.sh --force    # re-run Zeek even if conn.log exists
-#   ./run_zeek_on_pcaps.sh --pcap-root path/to/PCAPs --zeek-root path/to/ZEEK_LOGS
+#   ./run_zeek_on_pcaps_local.sh            # default: scan dataset/PCAPs and write to dataset/ZEEK_LOGS
+#   ./run_zeek_on_pcaps_local.sh --force    # re-run Zeek even if conn.log exists
+#   ./run_zeek_on_pcaps_local.sh --pcap-root path/to/PCAPs --zeek-root path/to/ZEEK_LOGS
 
 set -euo pipefail
 IFS=$'\n\t'
 
-# Defaults (adjust if your layout differs)
 PCAP_ROOT="dataset/PCAPs"
 ZEEK_ROOT="dataset/ZEEK_LOGS"
 FORCE=0
 
-# Simple arg parsing
+# Expected logs to check (tune if you want more/less)
+EXPECTED_LOGS=(conn.log dns.log http.log tls.log ssl.log files.log notice.log mqtt_publish.log mqtt_connect.log mqtt_subcribe.log weird.log)
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force) FORCE=1; shift;;
@@ -34,13 +35,12 @@ EOF
   esac
 done
 
-# Ensure zeek is installed
+# Check zeek binary
 if ! command -v zeek >/dev/null 2>&1; then
   echo "ERROR: zeek not found in PATH. Install Zeek and retry."
   exit 2
 fi
 
-# Expand to absolute paths
 PCAP_ROOT="$(realpath "$PCAP_ROOT")"
 ZEEK_ROOT="$(realpath "$ZEEK_ROOT")"
 
@@ -49,7 +49,6 @@ echo "Zeek output root: $ZEEK_ROOT"
 echo "Force mode: $FORCE"
 echo ""
 
-# Find pcap files
 mapfile -t PCAPS < <(find "$PCAP_ROOT" -type f \( -iname '*.pcap' -o -iname '*.pcapng' \) | sort)
 
 if [ ${#PCAPS[@]} -eq 0 ]; then
@@ -63,44 +62,63 @@ errors=0
 failed_list=()
 
 for pcap in "${PCAPS[@]}"; do
-  # compute relative path under PCAP_ROOT
-  rel="${pcap#$PCAP_ROOT/}"        # e.g. Brute-force/1/DigitalBrokerServer/file.pcap
-  # directory portion (Attack/run/path/device)
-  rel_dir="$(dirname "$rel")"      # e.g. Brute-force/1/DigitalBrokerServer
+  rel="${pcap#$PCAP_ROOT/}"
+  rel_dir="$(dirname "$rel")"
   target_dir="$ZEEK_ROOT/$rel_dir/zeek_logs"
+  mkdir -p "$target_dir" || { echo "Failed to create $target_dir"; errors=$((errors+1)); failed_list+=("$pcap"); continue; }
 
   echo "==="
   echo "PCAP: $pcap"
   echo "Target Zeek dir: $target_dir"
 
-  mkdir -p "$target_dir" || { echo "Failed to create $target_dir"; errors=$((errors+1)); failed_list+=("$pcap"); continue; }
-
-  # Skip if conn.log exists and not forcing
   if [ "$FORCE" -ne 1 ] && [ -f "$target_dir/conn.log" ]; then
     echo "Skipping (conn.log already exists). Use --force to re-run."
     skipped=$((skipped+1))
     continue
   fi
 
-  # run Zeek inside the target_dir so the logs are written there
-  # save stdout/stderr to zeek_run.log
   logfile="$target_dir/zeek_run.log"
   timestamp=$(date --iso-8601=seconds)
   echo "Run start: $timestamp" >> "$logfile"
-  echo "zeek -r \"$pcap\"" >> "$logfile"
+  echo "Running Zeek from PCAP dir and loading local scripts" >> "$logfile"
 
-  # run zeek; capture exit status
+  pcap_dir="$(dirname "$pcap")"
+  pcap_base="$(basename "$pcap")"
+
   (
-    cd "$target_dir"
-    if zeek -r "$pcap" >> "$logfile" 2>&1; then
-      echo "Zeek finished OK for $pcap (logs in $target_dir)" | tee -a "$logfile"
+    set -x
+    cd "$pcap_dir"
+    # Run Zeek from the PCAP folder so local.zeek loads. Use -C to ignore checksums and -s 65535 for full snaplen.
+    # Note: 'local' tells Zeek to load the local.zeek/site-specific script.
+    if zeek -C -s 65535 -r "$pcap" local >> "$logfile" 2>&1; then
+      echo "Zeek finished OK for $pcap" >> "$logfile"
+      # move produced logs out (if any). Use find to avoid moving unrelated files.
+      shopt -s nullglob
+      moved=0
+      for f in *.log *.csv; do
+        mv -f "$f" "$target_dir/" 2>/dev/null || true
+        moved=1
+      done
+      # If Zeek writes logs to subdirs, move them too (rare)
+      if [ $moved -eq 0 ]; then
+        # nothing moved — maybe Zeek wrote logs directly to $target_dir (if ZEEKPATH altered); that's fine
+        :
+      fi
       processed=$((processed+1))
     else
-      echo "Zeek failed for $pcap -- see $logfile" | tee -a "$logfile"
-      errors=$((errors+1))
-      failed_list+=("$pcap")
+      echo "Zeek failed for $pcap -- see $logfile" >> "$logfile"
+      errors=$((errors+1)); failed_list+=("$pcap")
     fi
   )
+
+  # After move, check for expected logs and warn if missing
+  for e in "${EXPECTED_LOGS[@]}"; do
+    if [ -f "$target_dir/$e" ]; then
+      echo " ok: $e exists" >> "$logfile"
+    else
+      echo " warn: $e missing in $target_dir" >> "$logfile"
+    fi
+  done
 
 done
 
