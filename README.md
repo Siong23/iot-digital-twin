@@ -35,10 +35,10 @@ The testbed consists of several key components:
 │   ├── exploit_interactive_backup.py # Interactive security testing backup
 │   └── requirements.txt       # Python dependencies
 ├── Collected Data/            # Dataset storage and management
-├── GenAI                      # Generative AI for generating realistic iot traffic
+├── GenAI/                     # Generative AI for generating realistic iot traffic
 │   ├── Model/                 # Model to generate traffic
 │   ├── data_preparation/      # preparation of dataset before training
-├── IoTDevice                  # IoT Device Scenarios
+├── IoTDevice/                 # IoT Device Scenarios
 │   ├── MQTTCaptureData/       # MQTT data capture modules
 │   ├── MQTTScenarios/         # MQTT broker and data management
 │   └── RTSPCaptureData/       # RTSP stream capture modules
