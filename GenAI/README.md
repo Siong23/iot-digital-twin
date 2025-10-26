@@ -288,12 +288,3 @@ ls -l *.log
 
 * This educational framework is provided for learning purposes. Use responsibly and ethically in controlled environments only.
 
----
-
-If you want, I can:
-
-* Add a short example `commands.txt` (copy/paste) for a new user, or
-* Produce a small Dockerfile that bundles Zeek/tshark/scapy + Python deps (helps with reproducibility), or
-* Generate a `troubleshooting.md` with logs and commands for specific errors you’ve encountered.
-
-Which one should I create next?
