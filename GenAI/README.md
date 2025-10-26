@@ -286,7 +286,7 @@ ls -l *.log
 
 # 10 — LICENSE & CITATION
 
-* If you use the Kaggle dataset, follow its license/terms and cite it appropriately in publications. Add dataset attribution in the repository’s top-level README or CITATION file.
+* This educational framework is provided for learning purposes. Use responsibly and ethically in controlled environments only.
 
 ---
 
