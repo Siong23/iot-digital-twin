@@ -80,7 +80,7 @@ pip3 install pandas numpy pyarrow tqdm scikit-learn cloudpickle sdv scapy
 
 # 3 — Dataset source note
 
-This project expects you to supply a dataset of PCAPs (the Kaggle IoT dataset you mentioned). Place PCAPs under:
+This project expects you to supply a dataset of PCAPs (Kaggle IoT dataset). Place PCAPs under:
 
 ```
 GenAI/dataset/PCAPs/<Attack>/<Count>/<Path>/*.pcap
